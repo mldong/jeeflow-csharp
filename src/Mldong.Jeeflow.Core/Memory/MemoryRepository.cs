@@ -476,7 +476,7 @@ public class MemoryRepository : IProcessRepository
             .GroupBy(t => t.DisplayName)
             .Select(g => new { key = g.Key, count = g.Count() })
             .OrderByDescending(x => x.count)
-            .ThenBy(x => x.key)
+            .ThenBy(x => x.key, StringComparer.Ordinal) // 码点序对齐 MySQL GROUP BY（非文化敏感）
             .Take(limit)
             .Select(x => new Dictionary<string, object?> { ["key"] = x.key, ["count"] = x.count })
             .ToList();
@@ -494,7 +494,7 @@ public class MemoryRepository : IProcessRepository
             .GroupBy(a => a.ActorId)
             .Select(g => new { key = g.Key, count = g.Count() })
             .OrderByDescending(x => x.count)
-            .ThenBy(x => x.key)
+            .ThenBy(x => x.key, StringComparer.Ordinal) // 码点序对齐 MySQL GROUP BY
             .Take(limit)
             .Select(x => new Dictionary<string, object?> { ["key"] = x.key, ["count"] = x.count })
             .ToList();
@@ -513,15 +513,20 @@ public class MemoryRepository : IProcessRepository
             .Select(g =>
             {
                 Defines.TryGetValue(g.Key ?? 0, out var pd);
-                // D 口径：count 全实例不过滤 state；avg 仅对 state=20 实例聚合（每实例 MAX(finish_time)）
-                var finished = g.Where(i => i.State == (int)WfInstanceState.Finished)
-                    .Select(i => i.Tasks.Count > 0 ? i.Tasks.Max(t => t.FinishTime) : null)
-                    .Where(ft => ft != null)
-                    .Select(ft => (DateTime)ft!)
-                    .ToList();
-                double? avg = finished.Count > 0
-                    ? Math.Round(finished.Average(ft => (ft - (g.First().CreateTime ?? ft)).TotalSeconds))
-                    : null;
+                // D 口径：count 全实例不过滤 state；avg 仅对 state=20 实例聚合（每实例 MAX(finish_time) - create_time）
+                var durs = new List<double>();
+                foreach (var i in g)
+                {
+                    if (i.State != (int)WfInstanceState.Finished) continue;
+                    var maxFt = Tasks.Values
+                        .Where(t => t.ProcessInstanceId == i.InstanceId && t.FinishTime != null)
+                        .Select(t => t.FinishTime!.Value)
+                        .DefaultIfEmpty(DateTime.MinValue)
+                        .Max();
+                    if (maxFt == DateTime.MinValue) continue;
+                    durs.Add((maxFt - (i.CreateTime ?? maxFt)).TotalSeconds);
+                }
+                double? avg = durs.Count > 0 ? Math.Round(durs.Average()) : null;
                 return new Dictionary<string, object?>
                 {
                     ["key"] = pd?.Name,
@@ -531,7 +536,7 @@ public class MemoryRepository : IProcessRepository
                 };
             })
             .OrderByDescending(r => r["count"])
-            .ThenBy(r => (string?)(r["key"] ?? ""))
+            .ThenBy(r => (string?)(r["key"] ?? ""), StringComparer.Ordinal)
             .Take(limit)
             .ToList();
         return Task.FromResult(result);

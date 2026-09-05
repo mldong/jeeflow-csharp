@@ -290,7 +290,7 @@ public partial class JeeflowFacade
             try
             {
                 var model = ModelParser.Parse(def.Content, _context);
-                nodeProgress = BuildNodeProgress(model, history);
+                nodeProgress = await BuildNodeProgressAsync(model, history);
                 CollectPath(model.GetStart(), activeNodeNames, historyNodeNames, historyEdgeNames,
                     new HashSet<string>(), inst.Variables, history);
             }
@@ -309,7 +309,7 @@ public partial class JeeflowFacade
     }
 
     /// <summary>节点成员进度（issue 41/C9）：成员列表优先从会签任务变量 operatorList_{node} 还原。</summary>
-    private Dictionary<string, object?> BuildNodeProgress(ProcessModel model, List<ProcessTask> history)
+    private async Task<Dictionary<string, object?>> BuildNodeProgressAsync(ProcessModel model, List<ProcessTask> history)
     {
         var progress = new Dictionary<string, object?>();
         var names = new List<string>();
@@ -368,7 +368,7 @@ public partial class JeeflowFacade
                 var m = new Dictionary<string, object?>
                 {
                     ["id"] = id,
-                    ["name"] = ResolveUserName(userProvider, id),
+                    ["name"] = await ResolveUserNameAsync(userProvider, id),
                 };
                 if (doneSet.Contains(id)) m["done"] = true;
                 else if (id == activeActor) m["active"] = true;
@@ -426,9 +426,6 @@ public partial class JeeflowFacade
             return "";
         }
     }
-
-    private string ResolveUserName(IUserProvider? userProvider, string userId) =>
-        ResolveUserNameAsync(userProvider, userId).GetAwaiter().GetResult();
 
     /// <summary>高亮路径收集：决策节点出边须表达式求值只收集 true 边（C14/issues/06）。</summary>
     private async Task CollectPathAsync(

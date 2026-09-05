@@ -174,9 +174,12 @@ public class TableReader
     public TableReader(IDbConnectionFactory factory) => _factory = factory;
 
     /// <summary>查询首行（列名→值）。</summary>
-    public Task<Dictionary<string, object?>?> QueryFirstAsync(string tableName, string whereColumn, object? value) =>
-        QueryListAsync(tableName, whereColumn, value, 1).ContinueWith(t =>
-            t.Result.Count == 0 ? null : t.Result[0]);
+    public async Task<Dictionary<string, object?>?> QueryFirstAsync(
+        string tableName, string whereColumn, object? value)
+    {
+        var rows = await QueryListAsync(tableName, whereColumn, value, 1);
+        return rows.Count == 0 ? null : rows[0];
+    }
 
     /// <summary>查询列表（limit 0 = 不限制）。</summary>
     public async Task<List<Dictionary<string, object?>>> QueryListAsync(
@@ -229,11 +232,11 @@ public class MetaTableReader
         if (row == null) return null;
         var meta = _provider.LoadTableMeta(tableName);
         if (meta == null) return row;
-        return Assemble(meta, row);
+        return await AssembleAsync(meta, row);
     }
 
     /// <summary>按元数据组装回显结果（字段名 → 值）。</summary>
-    public Dictionary<string, object?> Assemble(TableMeta meta, Dictionary<string, object?> row)
+    public async Task<Dictionary<string, object?>> AssembleAsync(TableMeta meta, Dictionary<string, object?> row)
     {
         var result = new Dictionary<string, object?>();
         foreach (var f in meta.Fields)
@@ -250,7 +253,7 @@ public class MetaTableReader
                     break;
                 case StorageType.One2One:
                 case StorageType.One2Many:
-                    var sub = ReadSubTableAsync(meta, f, row).GetAwaiter().GetResult();
+                    var sub = await ReadSubTableAsync(meta, f, row);
                     if (sub != null) result[f.Name!] = sub;
                     break;
                 default:
@@ -297,11 +300,11 @@ public class MetaTableReader
         {
             var sub = await _reader.QueryFirstAsync(f.TargetTable!, fk, parentPk);
             if (sub == null) return null;
-            return subMeta != null ? Assemble(subMeta, sub) : sub;
+            return subMeta != null ? await AssembleAsync(subMeta, sub) : sub;
         }
         var subs = await _reader.QueryListAsync(f.TargetTable!, fk, parentPk, 0);
         var result = new List<object?>();
-        foreach (var sub in subs) result.Add(subMeta != null ? Assemble(subMeta, sub) : sub);
+        foreach (var sub in subs) result.Add(subMeta != null ? await AssembleAsync(subMeta, sub) : sub);
         return result;
     }
 

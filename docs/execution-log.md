@@ -131,3 +131,29 @@
 - 期间修复：路由 `/wf/{action}` → `/wf/{**action}`（两级 action 段）、种子 design 写入临时 ext 实例、CloneDefine 丢 CreateTime/CreateUser
 
 **gate 结论**：T2 过，直入 M5。
+
+## M5 发版准备 + 登记 + 一致性（2026-09-06）
+
+**产物**
+
+- 一致性快照：`demo/Mldong.Jeeflow.Consistency`（驱动：2 流程/6 实例含 99/5 任务固定数据集，钟 2026-08-10 在数据集外）
+  → `jeeflow-hub/consistency/csharp.json` 15 key 落盘；**与 moon.json 逐字段全等**（其余语言差异均为已知格式化/并列序产物：
+  java 0.0 vs 0 浮点格式化、node/php/python stuckNode 并列序文化差异——C# 侧排序统一 StringComparer.Ordinal 码点序对齐 MySQL）。
+  驱动期修复 2 处：group_define avg 错锚（g.First()→各实例自身）、stuck 序文化敏感→Ordinal。
+- 版本定版：`Directory.Build.props` Version=1.0.0（4 包 + demo 继承）；后续 1.0.x 递增。
+- 联邦脚本增补（已验证）：`sync-schema.sh` 分发加 jeeflow-csharp；`release-checklist.sh` git 仓列表 + flows 漂移门禁加 csharp（实测 ✅）；`bump-version.sh --lang csharp`（改 Directory.Build.props + commit + tag，`--all` 纳入 csharp=O8，dry-run 验证过）；`stats-7lang-type-verify.py` 扩 8 语言（csharp 公网 demo 就绪后生效）。
+- VERSIONS.md：jeeflow-integrations 新增「jeeflow-csharp（C#/.NET 第 8 语言 · 发版就绪待用户执行）」节。
+- jeeflow-doc：`release.yml` checkout jeeflow-csharp、`sync-langs.js` 聚合 csharp 映射、`config.ts` 语言侧栏 + changelog 页 + 仓链接（🎯 C#/.NET · NuGet 1.0.x）。
+- 交付文档：README + getting-started/engine-api/flow-definition/spi-guide/persist/demo/index/CHANGELOG/contract-notes（契约对照 21 条）/testing + PUBLISH.md（发版执行清单）。
+- AGENTS 登记：jeeflow-hub §1/§2/§3.5/§4 + mldong-hub §3.5 + docs/jeeflow-demo-deploy-plan.md :8093 端口。
+- issues 台账：无 -csharp- issue（全程无 R1 契约硬停；编号 106 起保留给后续）。
+- CS3 复扫清零：BuildNodeProgress 异步化、MetaTableReader Assemble/QueryFirstAsync 异步化。
+
+**gate（发版就绪门票）**
+
+- T0 ✅ 153/153（memory，SKIP_MYSQL=1）　T1 ✅ 153/153（160 真库全量）　T2 ✅ smoke 20/20 + jeeflow-ui 代理链路
+- 漂移门禁 ✅ flows/ 与 java 源逐字一致（7 语言仓逐一 diff 验证，csharp 在列）
+- 一致性 ✅ 15 key；manifest ✅ 45 action 无差集
+- 就绪 ≠ 发版：NuGet publish / tag / push / 远端建仓全部留待用户（R4）
+
+**gate 结论**：M5 收口——**发版就绪**。
