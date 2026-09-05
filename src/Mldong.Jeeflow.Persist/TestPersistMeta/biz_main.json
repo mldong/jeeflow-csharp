@@ -1,0 +1,4 @@
+{"tableName":"biz_main","primaryKey":"id","fields":[
+  {"name":"days"},
+  {"name":"items","storageType":"ONE2MANY","targetTable":"biz_item","foreignKey":"main_id"}
+]}

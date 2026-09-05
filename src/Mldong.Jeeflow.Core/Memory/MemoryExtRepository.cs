@@ -6,19 +6,19 @@ namespace Mldong.Jeeflow.Core;
 public class MemoryExtRepository : IProcessExtRepository
 {
     private readonly MemoryRepository _repo;
-    private readonly IClock _clock;
-    private readonly IIdGenerator _idGen;
+    private readonly ServiceContext? _ctx;
+    private IClock Clock => _ctx?.ClockOrDefault ?? SystemClock.Instance;
+    private IIdGenerator IdGen => _ctx?.IdGeneratorOrDefault ?? new AtomicIdGenerator(0L, Clock);
 
     internal readonly Dictionary<long, ProcessDesign> Designs = new();
     internal readonly Dictionary<long, ProcessDesignHis> DesignHis = new();
     internal readonly Dictionary<long, ProcessSurrogate> Surrogates = new();
     internal long _hisAutoId;
 
-    public MemoryExtRepository(MemoryRepository repo, ServiceContext context)
+    public MemoryExtRepository(MemoryRepository repo, ServiceContext? context = null)
     {
         _repo = repo;
-        _clock = context.ClockOrDefault;
-        _idGen = context.IdGeneratorOrDefault;
+        _ctx = context;
     }
 
     // ═══ 流程设计 ═══
@@ -31,7 +31,7 @@ public class MemoryExtRepository : IProcessExtRepository
 
     public virtual Task SaveDesignAsync(ProcessDesign design)
     {
-        if (design.Id == null) design.Id = _idGen.NextId();
+        if (design.Id == null) design.Id = IdGen.NextId();
         Designs[design.Id.Value] = CloneDesign(design);
         return Task.CompletedTask;
     }
@@ -47,7 +47,7 @@ public class MemoryExtRepository : IProcessExtRepository
         stored.IsDeployed = design.IsDeployed ?? stored.IsDeployed;
         stored.Remark = design.Remark ?? stored.Remark;
         stored.UpdateUser = design.UpdateUser;
-        stored.UpdateTime = _clock.Now;
+        stored.UpdateTime = Clock.Now;
         return Task.CompletedTask;
     }
 
@@ -82,7 +82,7 @@ public class MemoryExtRepository : IProcessExtRepository
             Id = his.Id,
             ProcessDesignId = his.ProcessDesignId,
             Content = his.Content,
-            CreateTime = _clock.Now,
+            CreateTime = Clock.Now,
             CreateUser = his.CreateUser,
         };
         return Task.CompletedTask;
@@ -116,7 +116,7 @@ public class MemoryExtRepository : IProcessExtRepository
 
     public virtual Task SaveSurrogateAsync(ProcessSurrogate surrogate)
     {
-        if (surrogate.Id == null) surrogate.Id = _idGen.NextId();
+        if (surrogate.Id == null) surrogate.Id = IdGen.NextId();
         Surrogates[surrogate.Id.Value] = CloneSurrogate(surrogate);
         return Task.CompletedTask;
     }
@@ -132,7 +132,7 @@ public class MemoryExtRepository : IProcessExtRepository
         stored.EndTime = surrogate.EndTime;
         stored.Enabled = surrogate.Enabled ?? 1;
         stored.UpdateUser = surrogate.UpdateUser;
-        stored.UpdateTime = _clock.Now;
+        stored.UpdateTime = Clock.Now;
         return Task.CompletedTask;
     }
 

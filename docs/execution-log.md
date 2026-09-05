@@ -85,3 +85,27 @@
 **gate 结论**：T1 过，直入 M3。
 
 **漂移检查**：flows/ 与 java 源逐字一致 ✅（本阶段未改上游仓）
+
+## M3 Persist + Facade 全量（2026-09-06）
+
+**产物**
+
+- `Mldong.Jeeflow.Persist`（依赖仅 Core + BCL System.Data.Common，零第三方）：
+  - `IDynamicTableWriter`/`DbDynamicTableWriter`（T9）：information_schema 列探测 schema 限定 DATABASE()（C18）、宽松列匹配驼峰↔下划线（issues/20）、主键非自增无生成器显式报错（C18/issues/21）、参数化 INSERT、幂等 exists、系统字段补齐 apply_user_id 优先（C17/issues/19）、表名安全（sys_ 拒绝）、值转换（LocalDateTime→串、容器→JSON）。
+  - `MetaTableWriter`（NORMAL/JSON/EXPAND/ONE2ONE·ONE2MANY 子表递归；子表继承 apply_user_id putIfAbsent——C17/issues/24；无元数据回落基础 writer）。
+  - `MetaTableReader`+`TableReader`（bizData 回显：storageType 反序列化组装 + 无元数据回落原始行）。
+  - `PersistPostInterceptor`（ARCHIVE 缺省结束归档 FINISHED+AGREE INSERT / SYNC 发起 INSERT→任务节点 UPDATE→结束定稿；幂等 exists + 节点级 markChain 防同链双触发（C16）；字段权限双格式键只读/隐藏不写穿（C19/issues/25）；状态字段 {节点ID}_{状态码} 列探测；relTableName 回落 name；writer 未注入静默跳过）。
+- `Mldong.Jeeflow.Facade`：`FlowAsync/FlowJsonAsync` 45 action 全量（dispatch switch + unknown 兜底 99999999）；契约出口层经 Core Outbound（id 字符串化递归含复数、时间格式化、恒五键、stats int 出参）；入口 C3 双收/C15 ids 优先空报错/C26 时间双格式；stats 3 action 全纯列（C23/issues/105，todayNew 经 Clock）；bizData 经 ctx.BizDataReader（IBizDataReader，未注册显式报错）。
+
+**用例数**：全套件 **153/153 全绿**（SKIP_MYSQL=1 时 MySQL 13 个 vacuous pass）
+- Persist T0 9（fake writer 录制：ARCHIVE 时机/幂等/上下文字段、SYNC 权限过滤不写穿/结束定稿、同链防重、表名安全、FieldMeta、子表继承 apply_user）
+- Facade 22（45 action dispatch 全覆盖无 unknown（读 action-manifest.json 断言 45）、未知 action、五键+出口 id string、detail 不存在/双收、deploy 递增/redeploy 保 version（issues/59）、startAndExecute 出口 string id、todo/doneList operator 过滤、execute submitType 路由（2→45/20 软拒绝 flag 注入）、非处理人负向、instanceDetail 契约（formData/ext/isFirstTaskNode）、highLight 决策 true 边（C14）、approvalRecord 数字 code（C5）、taskDetail form+ext（issues/62）、设计生命周期、listByType 分组、委托 save/update/detail/remove（C26/issues/77）、bizData 未注册显式错、getLastByName、stats overview/trend/group 契约（缺参显式错/durationBucket 4 桶）、出口大数三态真流程审计、upAndDown 双键、withdraw）
+- PersistSmoke（160 真库）2：T1M3 ARCHIVE 明文落库（days/reason/apply_user_id）+ T1M4 SYNC 字段权限不写穿（days 只读保持 3/999 被拒、reason 可编辑更新、tf_ 冗余落库、task1_10=10 状态列）
+- 抓出 2 个真 bug 并修：MySqlConnector 事务内命令必须绑 Transaction（M2 已修）+ DbDynamicTableWriter.ToDbValue 误把 string 当 IEnumerable 序列化成 JSON
+
+**gate**
+
+- 45 action 契约测试（请求形态+信封+负向）✅；spec/09 persist 关键路径（ARCHIVE/SYNC/幂等/权限/状态字段）✅；出口审计 ✅；T1 复跑 M3/M4 落库 ✅
+- MySQL 测试类收编 [Collection("mysql")] 共享夹具串行执行（消并行 id 冲突）
+
+**gate 结论**：M3 过，直入 M4。

@@ -12,8 +12,9 @@ namespace Mldong.Jeeflow.Tests;
 /// - define 用 9xxxxx 段；实例以 BUSINESS_NO=T1CS- 前缀标记；测后自清理 + 清理验证
 /// - SKIP_MYSQL=1 开发机跳过；凭据只走 JEFFLOW_DB_* env；连不上=fail 不是 skip（发版机口径）
 /// </summary>
+[Collection("mysql")]
 [Trait("Category", "mysql-smoke")]
-public class MySqlBehaviorSuite : RepositoryBehaviorSuite, IClassFixture<MySqlFixture>
+public class MySqlBehaviorSuite : RepositoryBehaviorSuite
 {
     private readonly MySqlFixture _fx;
 
@@ -206,7 +207,8 @@ public class MySqlBehaviorSuite : RepositoryBehaviorSuite, IClassFixture<MySqlFi
 /// </summary>
 public sealed class MySqlFixture : IAsyncLifetime
 {
-    public MySqlConnectionFactory Factory { get; } = MySqlConnectionFactory.FromEnv();
+    private readonly MySqlConnectionFactory _fx_factory = MySqlConnectionFactory.FromEnv();
+    public MySqlConnectionFactory Factory => _fx_factory;
     public MySqlRepository Repo { get; private set; } = null!;
     public MySqlExtRepository ExtRepo { get; private set; } = null!;
     public ServiceContext Ctx { get; private set; } = null!;
@@ -220,6 +222,7 @@ public sealed class MySqlFixture : IAsyncLifetime
         if (Environment.GetEnvironmentVariable("SKIP_MYSQL") == "1") return;
         // 5 张 wf_* 表幂等确保（编辑源 schema-mysql.sql 副本；160 已建，IF NOT EXISTS 零副作用）
         await EnsureSchemaAsync();
+        await PurgeT1SegmentAsync(); // 清扫上次运行残留（仅 910000-919999 define 段，不碰他语言数据）
         Repo = new MySqlRepository(Factory);
         ExtRepo = new MySqlExtRepository(Factory, Repo);
         Ctx = new ServiceContext(Repo, ExtRepo);
@@ -308,6 +311,7 @@ public sealed class MySqlFixture : IAsyncLifetime
         if (Environment.GetEnvironmentVariable("SKIP_MYSQL") == "1") return;
         try
         {
+            await PurgeT1SegmentAsync();
             await using var conn = await Factory.OpenAsync();
             // 兜底清理：所有 T1CS 实例 + 910xxx define
             await Exec(conn, "DELETE a FROM wf_process_task_actor a " +
@@ -327,6 +331,43 @@ public sealed class MySqlFixture : IAsyncLifetime
         {
             // 收尾清理失败不掩盖测试结果（前面各用例已自清理）
         }
+    }
+
+    /// <summary>清扫本仓 T1 专属段（define 910000-919999 + 其派生实例），不影响他语言数据。</summary>
+    private async Task PurgeT1SegmentAsync()
+    {
+        await using var conn = await _fx_factory.OpenAsync();
+        await ExecRaw(conn, "DELETE a FROM wf_process_task_actor a " +
+            "JOIN wf_process_task t ON t.id = a.process_task_id " +
+            "JOIN wf_process_instance i ON i.id = t.process_instance_id " +
+            "WHERE i.process_define_id BETWEEN 910000 AND 919999");
+        await ExecRaw(conn, "DELETE t FROM wf_process_task t " +
+            "JOIN wf_process_instance i ON i.id = t.process_instance_id " +
+            "WHERE i.process_define_id BETWEEN 910000 AND 919999");
+        await ExecRaw(conn, "DELETE cc FROM wf_process_cc_instance cc " +
+            "JOIN wf_process_instance i ON i.id = cc.process_instance_id " +
+            "WHERE i.process_define_id BETWEEN 910000 AND 919999");
+        await ExecRaw(conn, "DELETE FROM wf_process_instance WHERE process_define_id BETWEEN 910000 AND 919999");
+        // 自愈：清理 define 已不存在的孤儿实例（任何语言残留的垃圾行；有效数据的 define 必存在）
+        await ExecRaw(conn, "DELETE t FROM wf_process_task t " +
+            "LEFT JOIN wf_process_instance i ON i.id = t.process_instance_id " +
+            "WHERE i.id IS NULL");
+        await ExecRaw(conn, "DELETE cc FROM wf_process_cc_instance cc " +
+            "LEFT JOIN wf_process_instance i ON i.id = cc.process_instance_id " +
+            "WHERE i.id IS NULL");
+        await ExecRaw(conn, "DELETE a FROM wf_process_task_actor a " +
+            "LEFT JOIN wf_process_task t ON t.id = a.process_task_id " +
+            "WHERE t.id IS NULL");
+        await ExecRaw(conn, "DELETE i FROM wf_process_instance i " +
+            "LEFT JOIN wf_process_define d ON d.id = i.process_define_id " +
+            "WHERE d.id IS NULL");
+        await ExecRaw(conn, "DELETE FROM wf_process_define WHERE id BETWEEN 910000 AND 919999");
+    }
+
+    private static async Task ExecRaw(MySqlConnection conn, string sql)
+    {
+        await using var cmd = new MySqlCommand(sql, conn);
+        await cmd.ExecuteNonQueryAsync();
     }
 
     public async Task<int> CountMarkerAsync(string marker)
