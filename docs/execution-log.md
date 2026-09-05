@@ -33,3 +33,29 @@
 **gate 结论**：M0 通过，直入 M1。
 
 **漂移检查**：java@b7ef670 / doc@4661554 与 manifest 基线一致（本阶段新建，无漂移）。
+
+## M1 Core + 内存仓储（T0）（2026-09-06）
+
+**产物**
+
+- Core 全模块（方案 §3.1 行 1）：model（聚合根/PageQuery/PageResult/UserInfo/FlowData）、spi（全 async 接口 + POCO ServiceContext + JeeflowQueryParser + DefaultActionPermissionProvider + DefaultExpressionEvaluator）、engine（JeeflowEngine 全 async 五方法 + Execution）、parser（ModelParser LogicFlow→模型树）、handler（CreateTask/Countersign/EndProcess/MergeBranch/StartSubProcess）、event（ProcessEvent + 逐监听器隔离 Publisher）、metadata（EnumDictRegistry 7 键 + HandlerRegistry FQCN 清单 + 内置 7 assignmentHandler）、memory（MemoryRepository + MemoryExtRepository，行为对齐 JDBC）、json（FlowData + DefaultJsonProvider + Outbound 出口层）、error、id_gen、IClock。
+- MemoryRepository 关键语义：id 由仓储 saveXxx 分配（IIdGenerator SPI，对齐 Java JDBC）；findInstanceById 水合 tasks（issues/89）；updateInstance 级联任务状态（v1.0.1，不含 business_no 列——JDBC SQL 口径）；saveTask 参与人全量覆盖 / addTaskActor 去重追加；分页白名单 + 默认 id DESC + 五键；stats 纯列查询 9 方法。
+
+**用例数**：`dotnet test`（memory）**100 用例全绿**，构成：
+- spike 10（async/雪花/出口三态审计/骨架/元数据）
+- 引擎基础 7（start/def 不存在/任务不存在/权限拒绝/无扩展仓储/autoGenTitle+u_* 注入/BusinessNo）
+- 事件 5（TASK_START 落库后 fire 可反查 / CC_CREATE 逐人直传 + cc 行 / 无监听器零副作用 / 拒绝路径 fire INSTANCE_END / 监听器逐个隔离）
+- 合规 c01–c22（22 个具名场景，15 flows 驱动）+ 扩展 c23–c31（软拒绝/一票否决/比例表达式/软拒后续/废弃任务负向/08 全链硬断言/jump-end-45/字段权限 resume）+ custom 节点 2（handler 执行 + C20 不可解析显式报错）
+- submitType 矩阵 11（8 值枚举/2→45/3 退回操作人/4 跳转含首任务节点强制发起人/非法节点名负向/6 退回发起人/015 普通完成/非处理人负向/tf_nextNodeOperator 覆盖/withdraw 30-30）
+- 单元测试包 33（parser 9/聚合根 5/FlowUtil 5/求值器 4/m_ 解析+内存分页 7/元数据权限 2）
+
+**gate**
+
+- 全绿 ✅；负向变异：串行会签 `merged=true` 变异 → C06/C28 红（2 fail）→ 还原复绿（100 pass）✅
+- CS3 门禁 grep `.Result|.Wait()|GetAwaiter().GetResult()` src/ 零命中 ✅
+- CS7 审计 `dotnet list package --include-transitive`：Core 双 TFM 零包引用（零第三方）✅
+- 量级对标 Moon T0 117：100（inventories 全覆盖，数量级一致）
+
+**gate 结论**：T0 过，直入 M2。
+
+**漂移检查**：flows/ 与 java@b7ef670 逐字一致（`diff -q` 无输出）✅

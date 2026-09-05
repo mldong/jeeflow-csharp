@@ -1,20 +1,28 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace Mldong.Jeeflow.Core;
 
 /// <summary>
 /// 内置默认表达式求值器（以 PHP WfExpressionEvaluator 为最小基准不超集，方案 §3.2）：
-/// 变量名替换（#var 会签门控变量优先）+ 比较运算（&gt;= &lt;= == != &gt; &lt;，数值优先字符串兜底）
-/// + 布尔字面量。决策边 expr / 会签完成条件 / DecisionModel.expr 全走此 SPI。
+/// 变量名替换（#var 会签门控变量按键后缀匹配，对齐 PHP str_ends_with 语义）+
+/// ${var} 占位 + 比较运算（&gt;= &lt;= == != &gt; &lt;，数值优先字符串兜底）+ 布尔字面量。
+/// 决策边 expr / 会签完成条件 / DecisionModel.expr 全走此 SPI。
 /// </summary>
 public sealed class DefaultExpressionEvaluator : IExpressionEvaluator
 {
     public static readonly DefaultExpressionEvaluator Instance = new();
 
+    private static readonly Regex HashVarPattern = new("^#([A-Za-z_][A-Za-z0-9_]*)", RegexOptions.Compiled);
+
     public object? Eval(string expression, IDictionary<string, object?> context)
     {
         var expr = (expression ?? "").Trim();
-        // 变量替换：长键优先，避免短键误吃长键子串
+        // ① ${var} 占位（未命中替换为 0）——先于裸变量名，防 ${count} 内的 count 被普通替换吃掉
+        expr = ReplacePlaceholder(expr, "${", "}", context);
+        // ② #var 会签门控变量：匹配"以 var 名结尾"的上下文键（如 csv_task1_nrOfCompletedInstances）
+        expr = ReplaceHashVars(expr, context);
+        // ③ 变量名替换：长键优先，避免短键误吃长键子串
         foreach (var key in context.Keys.OrderByDescending(k => k.Length))
         {
             if (string.IsNullOrEmpty(key)) continue;
@@ -24,9 +32,31 @@ public sealed class DefaultExpressionEvaluator : IExpressionEvaluator
                 expr = expr.Replace(key, val?.ToString() ?? "0");
             }
         }
-        // ${var} 占位（未命中替换为 0）
-        expr = ReplacePlaceholder(expr, "${", "}", context);
         return EvaluateComparison(expr);
+    }
+
+    private static string ReplaceHashVars(string expr, IDictionary<string, object?> context)
+    {
+        // 循环剥前缀 #（#nrOfCompletedInstances==2）
+        var guard = 0;
+        while (expr.StartsWith('#') && guard++ < 8)
+        {
+            var m = HashVarPattern.Match(expr);
+            if (!m.Success) break;
+            var name = m.Groups[1].Value;
+            string replaced = "0";
+            foreach (var key in context.Keys)
+            {
+                if (key.Length >= name.Length && key.EndsWith(name, StringComparison.Ordinal)
+                    && context[key] != null)
+                {
+                    replaced = context[key]?.ToString() ?? "0";
+                    break;
+                }
+            }
+            expr = replaced + expr[m.Length..];
+        }
+        return expr;
     }
 
     private static string ReplacePlaceholder(

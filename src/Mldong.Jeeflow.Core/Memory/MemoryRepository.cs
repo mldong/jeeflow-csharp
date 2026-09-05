@@ -9,9 +9,9 @@ namespace Mldong.Jeeflow.Core;
 /// </summary>
 public class MemoryRepository : IProcessRepository
 {
-    protected readonly ServiceContext Context;
-    protected readonly IClock Clock;
-    protected readonly IIdGenerator IdGen;
+    private ServiceContext? Context { get; set; }
+    protected IClock Clock => Context?.ClockOrDefault ?? SystemClock.Instance;
+    protected IIdGenerator IdGen => Context?.IdGeneratorOrDefault ?? new AtomicIdGenerator(0L, Clock);
 
     // ── 存储结构（表级模拟，含自增 cc/actor 行 id）──
     internal readonly Dictionary<long, ProcessDefine> Defines = new();
@@ -22,12 +22,13 @@ public class MemoryRepository : IProcessRepository
     internal long _ccAutoId;
     internal long _actorAutoId;
 
-    public MemoryRepository(ServiceContext context)
+    public MemoryRepository(ServiceContext? context = null)
     {
         Context = context;
-        Clock = context.ClockOrDefault;
-        IdGen = context.IdGeneratorOrDefault;
     }
+
+    /// <summary>两阶段接线：ServiceContext 构造后回填（打破 ctx↔repo 循环）。</summary>
+    public void Configure(ServiceContext context) => Context = context;
 
     public sealed class CcRow
     {
