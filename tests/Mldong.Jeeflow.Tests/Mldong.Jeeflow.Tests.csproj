@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Mldong.Jeeflow.Core\Mldong.Jeeflow.Core.csproj" />
+    <ProjectReference Include="..\..\src\Mldong.Jeeflow.Repository.MySql\Mldong.Jeeflow.Repository.MySql.csproj" />
+    <ProjectReference Include="..\..\src\Mldong.Jeeflow.Persist\Mldong.Jeeflow.Persist.csproj" />
+    <ProjectReference Include="..\..\src\Mldong.Jeeflow.Facade\Mldong.Jeeflow.Facade.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\flows\**\*.json" CopyToOutputDirectory="PreserveNewest" Link="flows/%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

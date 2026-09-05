@@ -1,0 +1,431 @@
+{
+  "_meta": {
+    "version": "1.0",
+    "created": "2026-09-06",
+    "purpose": "jeeflow C# 引擎（第 8 语言）M0 契约固化 —— 45 action 清单（Java 实查 ↔ 规范 ↔ MoonBit manifest ↔ C# 四方核对基准）",
+    "sources": {
+      "java": "jeeflow-java/jeeflow-core/src/main/java/com/mldong/jeeflow/facade/JeeflowFacade.java flow() switch（L100-L155）",
+      "spec": "jeeflow-doc/docs/spec/06-facade.md",
+      "plan": "jeeflow-hub/docs/moonbit-engine-implementation-plan.md §0.1/§3.3/§4",
+      "moon_manifest": "jeeflow-moon/docs/action-manifest.json（双 diff 基线，2026-09-05 与 Java diff 为空）"
+    },
+    "count": 45,
+    "baseline": {
+      "note": "spec 基线锚定（方案 §5 M0 通过条件）——每阶段收尾复核上游漂移",
+      "java_head": "b7ef670 chore(release): v1.8.27",
+      "moon_head": "见 jeeflow-moon manifest baseline（2026-09-05）",
+      "doc_head": "4661554 docs(changelog): 更新记录按语言分页重构",
+      "hub_head": "e032e2a docs(jeeflow): RELEASE.md changelog 检查项随文档站分语言分页重构对齐",
+      "issue_start": 106,
+      "issue_suffix": "-csharp-",
+      "toolchain": ".NET SDK 10.0.400（G:/dev-tools/dotnet，DOTNET_ROOT；aspnet 10.0.11 运行时）",
+      "version_line": "NuGet 独立 v1.0.0 起（O1）"
+    },
+    "verification": {
+      "java_vs_plan_section_0_1": "PASS — 45/45 无差集（processDefine 8 + processInstance 14 含 stats 3 + processSurrogate 5 + processTask 9）",
+      "java_vs_php_manifest_40": "PASS — 差集恰为 5 个新 action（processSurrogate/update+detail ← issues/77；stats×3 ← issues/103），零反向差集",
+      "checker": "scripts/check-action-manifest.mjs（本仓，M0 gate 复跑入口）",
+      "java_vs_moon_manifest": "PASS — 45/45 无差集（2026-09-05 moon M0 产物，本次复用）",
+      "java_vs_csharp_impl": "PENDING — M3 facade 45 action 落地后复跑（c01-c45 action 清单核对）"
+    },
+    "shared_contracts": {
+      "envelope": "恒 {code,msg,data}；成功 code=0 msg=成功；失败 code=99999999（只发明 99999999，不发明 9999xxxx）；未知 action → {code:99999999}",
+      "outbound": "出口纪律（facade 统一序列化层强制）：id 全字符串化递归含复数数组（id/*Id/*_id/Ids/ids 逐元素，对象数组不误伤）、时间 yyyy-MM-dd HH:mm:ss（Clock SPI）、分页恒五键、空 Map 序列化 {}、出口无 >2^53 number",
+      "inbound": "入口纪律：id 类参数 string/number 双收（不可解析→非法 id 而非缺少）、批量 {ids} 与单 {id} 双收（ids 优先）、空 ids 显式报错、m_ 三段式过滤解析",
+      "permission": "引擎不鉴权只供码 permissionCodes(action) 默认 wf:{action /→:}；null/空=仅登录；stats 3 action 登录放行不配权限码",
+      "async": "全链 async Task（方案 §2.3 全异步 SPI）：demo→facade→engine→repository SPI 全 async，无 sync-over-async（.Result/.Wait() 门禁 grep）"
+    }
+  },
+  "groups": {
+    "processDefine": {
+      "label": "流程定义",
+      "requiresExtRepository": false,
+      "actions": [
+        {
+          "action": "processDefine/page",
+          "method": "definePage",
+          "permission": "wf:processDefine:page",
+          "req": "PageQuery（pageNum/pageSize/orderBy/m_ 三段式过滤）",
+          "resp": "五键分页 rows=DefineRow{id,name,displayName,type,state,version,createTime,createUser,updateTime,updateUser}"
+        },
+        {
+          "action": "processDefine/detail",
+          "method": "defineDetail",
+          "permission": "wf:processDefine:detail",
+          "note": "OR: wf:processDesign:listByType",
+          "req": "{id} 双收",
+          "resp": "{id,name,displayName,type,state,version,jsonObject=parseGraph(content)}；不存在→流程定义不存在"
+        },
+        {
+          "action": "processDefine/startAndExecute",
+          "method": "startAndExecute",
+          "permission": "wf:processDefine:startAndExecute",
+          "note": "与 processInstance/startAndExecute 共用实现",
+          "req": "{processDefineId, operator?=user1, …flowArgs}",
+          "resp": "start 后自动完成申请节点（assignee=applicant→发起人，submitType=APPLY；f_nextNodeOperator→tf_nextNodeOperator 透传）；出 {processInstanceId}"
+        },
+        {
+          "action": "processDefine/deploy",
+          "method": "deploy",
+          "permission": "wf:processDefine:deploy",
+          "req": "{content}（字符串/对象/顶层 JSON 兼容）",
+          "resp": "按 name 查最新 version+1 插入 state=1；出 {processDefineId}"
+        },
+        {
+          "action": "processDefine/redeploy",
+          "method": "redeploy",
+          "permission": "wf:processDefine:redeploy",
+          "req": "{processDefineId, content}",
+          "resp": "替换内容 version 不变（C29 designRedeploy 同规）；出 ok"
+        },
+        {
+          "action": "processDefine/remove",
+          "method": "defineRemove",
+          "permission": "wf:processDefine:remove",
+          "req": "{ids}|{id} 双收，空显式报错",
+          "resp": "ok"
+        },
+        {
+          "action": "processDefine/upAndDown",
+          "method": "defineUpAndDown",
+          "permission": "wf:processDefine:upAndDown",
+          "req": "{ids,opType}|{id,state}（opType 优先）",
+          "resp": "ok"
+        },
+        {
+          "action": "processDefine/getLastByName",
+          "method": "getLastByName",
+          "permission": null,
+          "note": "登录即可访问（放行）",
+          "req": "{processDefineName}",
+          "resp": "PageQuery(1,1) orderBy version desc 首行 {id,name,displayName,type,state,version}；不存在→流程定义不存在: name"
+        }
+      ]
+    },
+    "processInstance": {
+      "label": "流程实例",
+      "requiresExtRepository": false,
+      "actions": [
+        {
+          "action": "processInstance/page",
+          "method": "instancePage",
+          "permission": "wf:processInstance:page",
+          "req": "PageQuery + operator（强制 t.operator EQ 过滤）",
+          "resp": "五键 rows=InstanceRow{id,parentId,processDefineId,state,parentNodeName,businessNo,operator,expireTime,variable,createTime,createUser,updateTime,updateUser,processDefineName,processDefineDisplayName,processDefineVersion,ext,displayName,version}"
+        },
+        {
+          "action": "processInstance/detail",
+          "method": "instanceDetail",
+          "permission": null,
+          "note": "登录即可访问（放行）",
+          "req": "{id} 双收",
+          "resp": "实例全字段 + variables + formData（f_ 前缀带/去前缀双键）+ jsonObject + tasks[]（vo+ext.isFirstTaskNode）+ activeTaskList（仅 DOING）；不存在→流程实例不存在"
+        },
+        {
+          "action": "processInstance/startAndExecute",
+          "method": "startAndExecute",
+          "permission": "wf:processInstance:startAndExecute",
+          "note": "与 processDefine/startAndExecute 共用实现",
+          "req": "同 processDefine/startAndExecute",
+          "resp": "同 processDefine/startAndExecute"
+        },
+        {
+          "action": "processInstance/withdraw",
+          "method": "withdraw",
+          "permission": "wf:processInstance:withdraw",
+          "req": "{id, operator?=user1}",
+          "resp": "实例 30 WITHDRAW + 任务 30（非 45，C28）级联持久化（v1.0.1）；不存在→流程实例不存在"
+        },
+        {
+          "action": "processInstance/bizData",
+          "method": "bizData",
+          "permission": null,
+          "note": "登录即可访问；需 jeeflow-persist metaTableReader（按名查找，未注册显式报错）",
+          "req": "{processInstanceId|id}",
+          "resp": "relTableName 从 define content 顶层解析（回落 name）→ metaTableReader.readByProcessInstance"
+        },
+        {
+          "action": "processInstance/highLight",
+          "method": "highLight",
+          "permission": null,
+          "note": "登录即可访问（放行）",
+          "req": "{id}",
+          "resp": "{activeNodeNames,historyNodeNames,historyEdgeNames(决策节点表达式求值只收 true 边，C14),nodeProgress（会签 members+type PARALLEL/SEQUENTIAL，全量办理人 operatorList_{node} 优先回退 actorIds 并集，name 经 IUserProvider 解析缺省空串）}"
+        },
+        {
+          "action": "processInstance/approvalRecord",
+          "method": "approvalRecord",
+          "permission": null,
+          "note": "登录即可访问（放行）",
+          "req": "{id}",
+          "resp": "history tasks → [{taskName,displayName,taskType(数字code),performType(数字code),taskState,operator=actorId,finishTime,variable,ext}]"
+        },
+        {
+          "action": "processInstance/getAssigneeTextData",
+          "method": "getAssigneeTextData",
+          "permission": null,
+          "note": "登录即可访问（放行）",
+          "req": "{id, includeNodeName?默认true}",
+          "resp": "doing tasks × actors → [{value=actor,label=displayName:actor|actor}]"
+        },
+        {
+          "action": "processInstance/createCCInstance",
+          "method": "createCCInstance",
+          "permission": "wf:processInstance:createCCInstance",
+          "note": "actorIds 缺失/空→报错",
+          "req": "{processInstanceId, actorIds 非空, operator?=user1}",
+          "resp": "ok"
+        },
+        {
+          "action": "processInstance/updateCCStatus",
+          "method": "updateCCStatus",
+          "permission": null,
+          "note": "登录即可访问（放行）",
+          "req": "{processInstanceId, operator?=user1}",
+          "resp": "ok"
+        },
+        {
+          "action": "processInstance/ccList",
+          "method": "ccList",
+          "permission": "wf:processInstance:ccList",
+          "req": "PageQuery + operator（cc.actor_id EQ）",
+          "resp": "五键 rows=InstanceRow"
+        },
+        {
+          "action": "processInstance/stats/overview",
+          "method": "statsOverview",
+          "permission": null,
+          "note": "C23 登录放行不配权限码；空库全 0",
+          "req": "{start?,end?,stateIn?默认[10,20,30,40,45,50]}",
+          "resp": "{total,inProgress(10),completed(20),rejected(45),withdrawn(30),suspended(50),todayNew(恒按服务器当天),avgDurationSeconds(MAX(finish_time)-create_time),rejectRate(4位舍入),pendingTaskCount,overdueTaskCount,countersignRate,onTimeRate}"
+        },
+        {
+          "action": "processInstance/stats/trend",
+          "method": "statsTrend",
+          "permission": null,
+          "note": "C23；缺参/非法 granularity→99999999 显式错误非静默空",
+          "req": "{start,end,granularity 必填；granularity∈hour/day/week/month}",
+          "resp": "data 本体裸数组 [{bucket,started,finished}]（枚举连续桶：hour yyyy-MM-dd HH:00 / day / week ISO YYYY-Www 对齐周一 / month）"
+        },
+        {
+          "action": "processInstance/stats/group",
+          "method": "statsGroup",
+          "permission": null,
+          "note": "C23；dimension 非法→99999999；全纯列不取 variable JSON",
+          "req": "{start?,end?,dimension?默认define,limit?默认10}",
+          "resp": "data 本体裸数组 [{key,label,count,avgDurationSeconds}]；dimension∈state/define/category/approver/applicant/node/stuckNode/stuckApprover/durationBucket（4桶 sameDay/1to3d/3to7d/over7d）"
+        }
+      ]
+    },
+    "processTask": {
+      "label": "流程任务",
+      "requiresExtRepository": false,
+      "actions": [
+        {
+          "action": "processTask/todoList",
+          "method": "todoList",
+          "permission": "wf:processTask:todoList",
+          "note": "入参仅 operator（C14）",
+          "req": "PageQuery + operator（pta.actor_id EQ）",
+          "resp": "五键 rows=TaskRow{id,processInstanceId,taskName,displayName,taskType,performType,taskState,operator,finishTime,expireTime,formKey,taskParentId,variable,createTime,createUser,updateTime,updateUser,processDefineName,processDefineDisplayName,instanceVariable,instanceCreateTime,ext(任务变量空回实例变量),instanceExt,version,taskFormData(tf_ 双键)}"
+        },
+        {
+          "action": "processTask/doneList",
+          "method": "doneList",
+          "permission": "wf:processTask:doneList",
+          "note": "入参仅 operator（C14）",
+          "req": "PageQuery + operator（t.operator EQ）",
+          "resp": "五键 rows=TaskRow 同 todoList"
+        },
+        {
+          "action": "processTask/execute",
+          "method": "execute",
+          "permission": "wf:processTask:execute",
+          "req": "{processTaskId, operator?=user1, submitType?默认1(AGREE)}",
+          "resp": "submitType 分发：2→executeAndJumpToEnd；3→executeAndJumpTask(null 沿首入边回退)；4→executeAndJumpTask(taskName)；6→executeAndJumpToFirstTaskNode；20→countersignDisagreeFlag=1 execute；0/1/5→execute；出 ok；非处理人执行→99999999"
+        },
+        {
+          "action": "processTask/detail",
+          "method": "taskDetail",
+          "permission": null,
+          "note": "登录即可访问；taskModel 含 form 与 ext（PERMISSION_* 键，C14/C19）",
+          "req": "{id, operator?=user1}",
+          "resp": "taskVo + taskActorIdList + executable + ext(含 isFirstTaskNode) + jsonObject + taskModel{name,displayName,type,form,ext}；不存在→任务不存在"
+        },
+        {
+          "action": "processTask/jumpAbleTaskNameList",
+          "method": "jumpAbleTaskNameList",
+          "permission": "wf:processTask:jumpAbleTaskNameList",
+          "req": "{processInstanceId}",
+          "resp": "done 去会签任务去重 → [{label=displayName,value=taskName}]"
+        },
+        {
+          "action": "processTask/candidatePage",
+          "method": "candidatePage",
+          "permission": "wf:processTask:execute OR wf:processTask:candidatePage",
+          "note": "行键归一 {id,realName,userId?,userName?,deptName?}（issues/80）",
+          "req": "{processTaskId|id}",
+          "resp": "模型候选→IUserSearchProvider 优先 IUserProvider 兜底映射；无模型候选→userSearchProvider.page；未配置 provider→99999999"
+        },
+        {
+          "action": "processTask/surrogate",
+          "method": "taskSurrogate",
+          "permission": "wf:processTask:surrogate",
+          "note": "addTaskActor=去重追加非全删全插（C14）",
+          "req": "{processTaskId, actorIds 非空（数组或逗号串）}",
+          "resp": "ok；缺失→processTaskId/actorIds 缺失"
+        },
+        {
+          "action": "processTask/addCandidate",
+          "method": "taskAddCandidate",
+          "permission": null,
+          "note": "登录即可访问；与 surrogate 同实现",
+          "req": "同 processTask/surrogate",
+          "resp": "同 processTask/surrogate"
+        },
+        {
+          "action": "processTask/latest",
+          "method": "taskLatest",
+          "permission": null,
+          "note": "登录即可访问（放行）",
+          "req": "{processInstanceId}",
+          "resp": "doing 第一个 taskVo；无 doing→data=null"
+        }
+      ]
+    },
+    "processDesign": {
+      "label": "流程设计",
+      "requiresExtRepository": true,
+      "actions": [
+        {
+          "action": "processDesign/page",
+          "method": "designPage",
+          "permission": "wf:processDesign:page",
+          "req": "PageQuery",
+          "resp": "五键 rows=DesignRow{id,name,displayName,type,icon,isDeployed,remark,createTime,createUser,updateTime,updateUser}"
+        },
+        {
+          "action": "processDesign/detail",
+          "method": "designDetail",
+          "permission": "wf:processDesign:detail",
+          "req": "{id}",
+          "resp": "全字段 + jsonObject（最新 his content，缺基本信息从设计表补齐 issues/07）+ his[]；不存在→流程设计不存在"
+        },
+        {
+          "action": "processDesign/save",
+          "method": "designSave",
+          "permission": "wf:processDesign:save",
+          "note": "无 content 写默认快照（C14）",
+          "req": "{id?,name,displayName,type?=approval,icon?,remark?,content?}",
+          "resp": "新建 isDeployed=0 或更新（content 变更→isDeployed=0）；content 快照存 his；出 {id}"
+        },
+        {
+          "action": "processDesign/update",
+          "method": "designUpdate",
+          "permission": "wf:processDesign:update",
+          "note": "只改基本信息不写快照",
+          "req": "{id,…可选字段}",
+          "resp": "ok"
+        },
+        {
+          "action": "processDesign/updateDefine",
+          "method": "designUpdateDefine",
+          "permission": "wf:processDesign:updateDefine",
+          "note": "接受顶层 JSON 非 content 字段（C14）；与最新快照相同不重复入库",
+          "req": "{processDesignId, content 必填}",
+          "resp": "快照入库 + 同步 name/displayName/type + 置未部署；ok"
+        },
+        {
+          "action": "processDesign/remove",
+          "method": "designRemove",
+          "permission": "wf:processDesign:remove",
+          "req": "{ids}|{id}",
+          "resp": "ok"
+        },
+        {
+          "action": "processDesign/deploy",
+          "method": "designDeploy",
+          "permission": "wf:processDesign:deploy",
+          "req": "{id}",
+          "resp": "无 his→流程设计没有内容，无法发布；发布 define（version 规则同 deploy）+ isDeployed=1；出 {processDefineId}"
+        },
+        {
+          "action": "processDesign/redeploy",
+          "method": "designRedeploy",
+          "permission": "wf:processDesign:redeploy",
+          "note": "替换分支继承原 version 禁 null→1 漂移（C29/issues/59）",
+          "req": "{id}",
+          "resp": "按 name 最新 define 有则替换内容 version 不变无则新建；isDeployed=1；出 {processDefineId}"
+        },
+        {
+          "action": "processDesign/listByType",
+          "method": "designListByType",
+          "permission": null,
+          "note": "登录即可访问（issues/28）；分组契约 C14：组序=type 数值升序、组内 id DESC（M3 契约测试定案）",
+          "req": "PageQuery（忽略分页取全量）",
+          "resp": "按 type 分组：{type:[{processDesignId,name,displayName,icon,remark,processDefineId,processDefineState,jsonObject(最新设计稿)}]}"
+        }
+      ]
+    },
+    "processSurrogate": {
+      "label": "委托代理",
+      "requiresExtRepository": true,
+      "actions": [
+        {
+          "action": "processSurrogate/page",
+          "method": "surrogatePage",
+          "permission": "wf:processSurrogate:page",
+          "req": "PageQuery",
+          "resp": "五键 rows=SurrogateRow{id,processName,operator,surrogate,startTime,endTime,enabled,createTime,createUser,updateTime,updateUser}"
+        },
+        {
+          "action": "processSurrogate/save",
+          "method": "surrogateSave",
+          "permission": "wf:processSurrogate:save",
+          "note": "时间窗空格与 ISO T 双格式解析（C26）；enabled=0 不得折叠成 1",
+          "req": "{id?,processName,operator?(显式传入才覆盖),surrogate,startTime,endTime,enabled?默认1}",
+          "resp": "新建 create=operator；出 {id}"
+        },
+        {
+          "action": "processSurrogate/update",
+          "method": "surrogateUpdate",
+          "permission": "wf:processSurrogate:update",
+          "note": "issues/77；授权人缺省保留原值",
+          "req": "{id 必填,…可选字段}",
+          "resp": "按 id 全字段更新；出 {id}；记录不存在→委托记录不存在"
+        },
+        {
+          "action": "processSurrogate/detail",
+          "method": "surrogateDetail",
+          "permission": "wf:processSurrogate:detail",
+          "note": "issues/77",
+          "req": "{id}",
+          "resp": "行结构（时间格式化）"
+        },
+        {
+          "action": "processSurrogate/remove",
+          "method": "surrogateRemove",
+          "permission": "wf:processSurrogate:remove",
+          "note": "issues/95 统一 {ids}",
+          "req": "{ids}|{id}",
+          "resp": "ok"
+        }
+      ]
+    }
+  },
+  "summary": {
+    "total": 45,
+    "byGroup": {
+      "processDefine": 8,
+      "processInstance": 14,
+      "processTask": 9,
+      "processDesign": 9,
+      "processSurrogate": 5
+    },
+    "requiresExtRepository": [
+      "processDesign/* (9)",
+      "processSurrogate/* (5)"
+    ],
+    "unknownActionFallback": "{code:99999999, msg:未知 action: <action>}"
+  }
+}

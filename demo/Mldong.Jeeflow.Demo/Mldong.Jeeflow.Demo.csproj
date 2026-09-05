@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- 轻量 demo（不发布）：minimal API :8093 + 8 用户 SPI + flows 种子 -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Mldong.Jeeflow.Demo</AssemblyName>
+    <RootNamespace>Mldong.Jeeflow.Demo</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Mldong.Jeeflow.Facade\Mldong.Jeeflow.Facade.csproj" />
+    <ProjectReference Include="..\..\src\Mldong.Jeeflow.Repository.MySql\Mldong.Jeeflow.Repository.MySql.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\flows\**\*.json" CopyToOutputDirectory="PreserveNewest" Link="flows/%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

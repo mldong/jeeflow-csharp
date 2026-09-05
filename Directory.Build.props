@@ -1,0 +1,22 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <WarningLevel>9</WarningLevel>
+    <!-- CS4/C++混合风格禁用：库产品不生成 doc 文件告警 -->
+    <NoWarn>$(NoWarn);NU5104</NoWarn>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <CompressionEnabled>false</CompressionEnabled>
+    <!-- 版本线：NuGet 独立 1.0.x（方案 §9 O1） -->
+    <Version>1.0.0</Version>
+    <Authors>mldong</Authors>
+    <Product>jeeflow</Product>
+    <Description>jeeflow 工作流引擎 C#/.NET 实现（第 8 语言）</Description>
+    <RepositoryUrl>https://github.com/mldong/jeeflow-csharp</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+</Project>

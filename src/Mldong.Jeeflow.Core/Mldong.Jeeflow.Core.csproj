@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 引擎核心：零第三方依赖（联邦硬约束，spec/05；S.T.J 为 BCL 内置件） -->
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+  </PropertyGroup>
+</Project>

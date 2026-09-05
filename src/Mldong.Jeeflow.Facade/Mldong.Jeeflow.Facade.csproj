@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Mldong.Jeeflow.Core\Mldong.Jeeflow.Core.csproj" />
+    <ProjectReference Include="..\Mldong.Jeeflow.Persist\Mldong.Jeeflow.Persist.csproj" />
+  </ItemGroup>
+</Project>
