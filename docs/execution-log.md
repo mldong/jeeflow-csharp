@@ -109,3 +109,25 @@
 - MySQL 测试类收编 [Collection("mysql")] 共享夹具串行执行（消并行 id 冲突）
 
 **gate 结论**：M3 过，直入 M4。
+
+## M4 轻量 demo + jeeflow-ui 段位 + T2（2026-09-06）
+
+**产物**
+
+- demo（ASP.NET Core minimal API，:8093，零业务层）：`POST /wf/{**action}` 全转发 facade（FlowJsonAsync 契约出口）、`GET /health`、`GET /api/stats`、`POST /api/reset`（memory 重建+重载种子；mysql 回 ok）、CORS 全开 + OPTIONS 204。
+- 双存储：`JEEFLOW_DEMO_STORE=memory`（默认，种子 15 流程 define(id=1..N)+design+design_his）/ `mysql`（JEFFLOW_DB_* 共享库）。
+- 8 具名用户 SPI：IUserProvider / IOrgUserProvider（dept 领导 post2+/分管 post4+ boss 兜底/角色码匹配）/ IUserSearchProvider（关键词分页）。
+- flows resolver：JEEFLOW_FLOWS_DIR → 候选探测；java 兄弟目录存在则精确镜像（全量复制+删孤儿）。
+- 负向：body 解析失败 → 99999999 + stderr 日志（issues/88 口径）；未知 action 同码。
+- `demo/smoke_test.sh`：20 项端到端冒烟（入库）。
+- jeeflow-ui（独立仓 f1d889b）：`/csharp-api` 代理（→ :8093）+ `.env` VITE_BACKEND_CSHARP + `?lang=csharp` 分段（LANG_MAP + backends 数组）。
+
+**gate**
+
+- curl 全路由 ✅（health/listByType/page/startAndExecute/stats/reset）
+- 负向全中 ✅（非法 body→99999999+stderr、未知 action→99999999）
+- smoke_test.sh 20/20 ✅：发起(07 比例会签)→userA/userB 办理→2/4 达成 merged→废弃残留→实例 FINISHED(20)；高亮 nodeProgress 会签成员 done ✓；抄送 createCCInstance/ccList ✓
+- jeeflow-ui 代理链路 ✅：vite dev :5173 `/csharp-api/health`、`/csharp-api/wf/processDefine/page` 转发通（vite 热载新配置验证）
+- 期间修复：路由 `/wf/{action}` → `/wf/{**action}`（两级 action 段）、种子 design 写入临时 ext 实例、CloneDefine 丢 CreateTime/CreateUser
+
+**gate 结论**：T2 过，直入 M5。

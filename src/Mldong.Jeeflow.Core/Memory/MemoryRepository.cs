@@ -895,6 +895,9 @@ public class MemoryRepository : IProcessRepository
         Content = d.Content,
         Version = d.Version,
         UpdateUser = d.UpdateUser,
+        UpdateTime = d.UpdateTime,
+        CreateTime = d.CreateTime,
+        CreateUser = d.CreateUser,
     };
 
     protected static ProcessInstance CloneInstance(ProcessInstance i) => new()

@@ -6,7 +6,7 @@ namespace Mldong.Jeeflow.Core;
 public class MemoryExtRepository : IProcessExtRepository
 {
     private readonly MemoryRepository _repo;
-    private readonly ServiceContext? _ctx;
+    private ServiceContext? _ctx;
     private IClock Clock => _ctx?.ClockOrDefault ?? SystemClock.Instance;
     private IIdGenerator IdGen => _ctx?.IdGeneratorOrDefault ?? new AtomicIdGenerator(0L, Clock);
 
@@ -20,6 +20,9 @@ public class MemoryExtRepository : IProcessExtRepository
         _repo = repo;
         _ctx = context;
     }
+
+    /// <summary>两阶段接线：ServiceContext 构造后回填。</summary>
+    public void Configure(ServiceContext context) => _ctx = context;
 
     // ═══ 流程设计 ═══
 
