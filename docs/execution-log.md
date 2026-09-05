@@ -59,3 +59,29 @@
 **gate 结论**：T0 过，直入 M2。
 
 **漂移检查**：flows/ 与 java@b7ef670 逐字一致（`diff -q` 无输出）✅
+
+## M2 Repository.MySql（T1）（2026-09-06）
+
+**产物**
+
+- `MySqlRepository`（IProcessRepository 全 21+ 方法，SQL 逐条对齐 JdbcProcessRepository）：定义/实例/任务/参与人/抄送写读、分页五键（白名单 buildWhere/buildOrder + LIMIT/OFFSET 内联非负整数 C21）、NULL 安全读（GetStr/GetLong/GetInt/GetDateTime/GetBytes 显式 DBNull）、聚合水合（findInstanceById 级联 tasks，issues/89）、updateInstance 级联任务状态（v1.0.1）、saveTask 参与人全量覆盖 / addTaskActor 去重追加、stats 纯列 9 方法（C23，avg int 出参 issues/105）。
+- `MySqlExtRepository`（14 方法）：design/his/surrogate 全 CRUD+分页；removeDesign 级联删历史；getSurrogate operator/enabled/surrogate<>operator/时间窗/精确优先全流程兜底（id DESC LIMIT 1）。
+- `MySqlTransactionTemplate` 真实现：单连接 BeginTransactionAsync → AsyncLocal 环境连接+环境事务（MySqlConnector 强制命令绑 Transaction）→ commit/rollback；仓储命令统一经 NewCmd 自动绑定活动事务。
+- `JeeflowEngine` 命令级信号量串行化（.NET 多线程下"单线程事件循环"等价物）——并发办理同任务读-改-写守卫天然原子。
+- T1 冒烟（mysql-smoke 分组 + MySqlFixture 夹具：schema 幂等确保 + 9xxxxx define + BUSINESS_NO=T1CS-* 标记 + 测后自清理与清理验证）。
+
+**用例数**：全套件 120 用例
+- T0（SKIP_MYSQL=1，本机 memory）：**120/120 绿**（MySQL 侧 13 个 vacuous pass，开发机跳过口径）
+- T1（连 160 真库）：**120/120 绿**，其中 MySQL 实跑 13：行为双跑 7（与 Memory 同断言套件，防仓储分叉）+ T1 专项 5（M1 分页五键真 SQL/m_ 过白名单、M2 hydrate 雪花>2^53 主键+9xxxxx 手动主键精确保真、事务回滚无半完成实例、并发办理恰一次成功、自清理可验证）+ spike 连通 1
+- 修复过程抓出两个真 bug：MySqlConnector 事务内命令必须绑 Transaction（环境事务通道）；多线程下引擎读-改-写需命令级串行化
+
+**gate**
+
+- T1 过（本机→160，JEFFLOW_DB_* env；9xxxxx 段 + T1CS-* 标记自清理，清理验证断言过）✅
+- 内存/MySQL 行为测试双跑无分叉（同套件断言 7/7 双绿）✅
+- 事务回滚无半完成实例 ✅；并发办理只一次成功（1 成功 1 拒绝）✅
+- SKIP_MYSQL=1 开发机全绿；无 SKIP 凭据缺失=fail（发版机 REQUIRE_MYSQL 口径）✅
+
+**gate 结论**：T1 过，直入 M3。
+
+**漂移检查**：flows/ 与 java 源逐字一致 ✅（本阶段未改上游仓）

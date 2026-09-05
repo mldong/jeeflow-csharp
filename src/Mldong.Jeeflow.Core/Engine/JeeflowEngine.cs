@@ -9,6 +9,13 @@ public class JeeflowEngine
 {
     private readonly ServiceContext _context;
 
+    /// <summary>
+    /// 引擎命令级串行化（.NET 多线程下的"单线程事件循环"等价物，方案 §6.2）：
+    /// 同一引擎实例的命令互斥执行，保证 prepare→complete→persist 读-改-写状态守卫
+    /// 天然原子——并发办理同任务恰一次成功。
+    /// </summary>
+    private readonly System.Threading.SemaphoreSlim _cmdGate = new(1, 1);
+
     public JeeflowEngine(ServiceContext context)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
@@ -23,7 +30,14 @@ public class JeeflowEngine
     public Task<ProcessInstance> StartProcessInstanceByIdAsync(long? defineId, string? op, FlowData args) =>
         StartProcessInstanceByIdAsync(defineId, op, args, null, null);
 
-    public async Task<ProcessInstance> StartProcessInstanceByIdAsync(
+    public Task<ProcessInstance> StartProcessInstanceByIdAsync(
+        long? defineId, string? op, FlowData args,
+        long? parentId, string? parentNodeName)
+    {
+        return RunInGateAsync(() => StartInTxAsync(defineId, op, args, parentId, parentNodeName));
+    }
+
+    private async Task<ProcessInstance> StartInTxAsync(
         long? defineId, string? op, FlowData args,
         long? parentId, string? parentNodeName)
     {
@@ -64,7 +78,10 @@ public class JeeflowEngine
 
     // ═══ 执行任务 ═══
 
-    public async Task<List<ProcessTask>> ExecuteProcessTaskAsync(long taskId, string? op, FlowData args)
+    public Task<List<ProcessTask>> ExecuteProcessTaskAsync(long taskId, string? op, FlowData args) =>
+        RunInGateAsync(() => ExecuteProcessTaskInTxAsync(taskId, op, args));
+
+    private async Task<List<ProcessTask>> ExecuteProcessTaskInTxAsync(long taskId, string? op, FlowData args)
     {
         return await RunInTxAsync(async () =>
         {
@@ -80,7 +97,11 @@ public class JeeflowEngine
         });
     }
 
-    public async Task<List<ProcessTask>> ExecuteAndJumpTaskAsync(
+    public Task<List<ProcessTask>> ExecuteAndJumpTaskAsync(
+        long taskId, string? op, FlowData args, string? nodeName) =>
+        RunInGateAsync(() => ExecuteAndJumpTaskInTxAsync(taskId, op, args, nodeName));
+
+    private async Task<List<ProcessTask>> ExecuteAndJumpTaskInTxAsync(
         long taskId, string? op, FlowData args, string? nodeName)
     {
         return await RunInTxAsync(async () =>
@@ -114,7 +135,10 @@ public class JeeflowEngine
         });
     }
 
-    public async Task<List<ProcessTask>> ExecuteAndJumpToEndAsync(long taskId, string? op, FlowData args)
+    public Task<List<ProcessTask>> ExecuteAndJumpToEndAsync(long taskId, string? op, FlowData args) =>
+        RunInGateAsync(() => ExecuteAndJumpToEndInTxAsync(taskId, op, args));
+
+    private async Task<List<ProcessTask>> ExecuteAndJumpToEndInTxAsync(long taskId, string? op, FlowData args)
     {
         return await RunInTxAsync(async () =>
         {
@@ -135,7 +159,11 @@ public class JeeflowEngine
         });
     }
 
-    public async Task<List<ProcessTask>> ExecuteAndJumpToFirstTaskNodeAsync(
+    public Task<List<ProcessTask>> ExecuteAndJumpToFirstTaskNodeAsync(
+        long taskId, string? op, FlowData args) =>
+        RunInGateAsync(() => ExecuteAndJumpToFirstTaskNodeInTxAsync(taskId, op, args));
+
+    private async Task<List<ProcessTask>> ExecuteAndJumpToFirstTaskNodeInTxAsync(
         long taskId, string? op, FlowData args)
     {
         return await RunInTxAsync(async () =>
@@ -297,6 +325,19 @@ public class JeeflowEngine
                     CcActorId = ccActorId,
                 },
                 _context.EventListeners);
+        }
+    }
+
+    private async Task<T> RunInGateAsync<T>(Func<Task<T>> action)
+    {
+        await _cmdGate.WaitAsync();
+        try
+        {
+            return await action();
+        }
+        finally
+        {
+            _cmdGate.Release();
         }
     }
 

@@ -834,8 +834,8 @@ public class MemoryRepository : IProcessRepository
         ["process_define_name"] = pd?.Name,
         ["process_define_display_name"] = pd?.DisplayName,
         ["process_define_version"] = pd?.Version,
-        ["cc_actor_id"] = cc?.ActorId,
-        ["cc_state"] = cc?.State,
+        ["cc.actor_id"] = cc?.ActorId,
+        ["cc.state"] = cc?.State,
     };
 
     protected IProcessRepository.InstanceRow RowToInstance(Dictionary<string, object?> d) => new()
