@@ -157,3 +157,20 @@
 - 就绪 ≠ 发版：NuGet publish / tag / push / 远端建仓全部留待用户（R4）
 
 **gate 结论**：M5 收口——**发版就绪**。
+
+## 发布执行留痕（2026-09-06，R4 解除：用户已确认 push/publish）
+
+- GitHub 远端建仓 `mldong/jeeflow-csharp`（用户提供 SSH），master 推送 3 个发布期 commit：
+  f746a38（release.yml + PUBLISH §A-§D）→ 414f1a4（Push 可观测化）→ b2cf5d8（NUGET_API_KEY 大写修复）。
+- NuGet Trusted Publishing policy 建好（用户操作）：owner=mldong / repo=mldong/jeeflow-csharp /
+  workflow=release.yml / glob=Mldong.Jeeflow* / scope=Push new packages and package versions。
+- tag `v1.0.0` 三推两修：run 34004326509 fail（Push exit 1，原因未知期）→ 34004675880 fail（实证
+  401 No API Key——NuGet/login@v1 输出名为大写 NUGET_API_KEY，小写引用取空）→ **34004792139 全绿**，
+  四包拓扑序 push 成功。
+- nuget.org 实证：registration/search 双端点查四包 1.0.0 全部可查（新包 validation 有约 10 分钟索引滞后，
+  flat-container/registration 滞后于 search 端点，排障时以 azuresearch query 为准）。
+- 回拉验证通过：/tmp/nuget-verify 临时工程 `dotnet add package Mldong.Jeeflow.Facade/Repository.MySql -v 1.0.0`
+  （nuget.org 真实解析 + 传递依赖 Core/Persist/MySqlConnector 齐全）四程序集 typeof 加载 + dotnet run 全通，测后已清理。
+- 排障方法论留档：Actions 日志 API 需 admin 权限；公开仓匿名排障走 check-runs annotations
+  （`::error::` 行会被抓取）+ Job Summary（仅网页渲染，API 不透出）。
+- 剩余未办（等用户）：公网 demo 16087→8093 上线；jeeflow-doc Release workflow 部署文档站（csharp 侧栏已配）。
