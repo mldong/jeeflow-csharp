@@ -1,0 +1,53 @@
+# NuGet.org Trusted Publishing（GitHub Actions OIDC，免 API key）
+# 前置：nuget.org 已建 Trusted Publishing policy（owner=mldong / repo=mldong/jeeflow-csharp /
+#       workflow=release.yml / glob=Mldong.Jeeflow*），见 docs/PUBLISH.md §B。
+# 触发：推 v* tag（发布；版本号取自 tag，v1.0.0 → 1.0.0）或手动 workflow_dispatch（用项目内默认版本）。
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Trusted Publishing 必需：向 nuget.org 换取临时 API key
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Pack
+        run: |
+          ARGS=(./Jeeflow.sln -c Release -o "$PWD/artifacts")
+          if [[ "$GITHUB_REF_NAME" == v* ]]; then
+            ARGS+=("-p:Version=${GITHUB_REF_NAME#v}")
+          fi
+          dotnet pack "${ARGS[@]}"
+          ls -l artifacts/*.nupkg
+
+      - name: NuGet login（OIDC → 临时 API key，约 1 小时有效）
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: mldong
+
+      # 拓扑序：Core → Persist / Repository.MySql → Facade
+      - name: Push
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.nuget-api-key }}
+        run: |
+          for pkg in Mldong.Jeeflow.Core Mldong.Jeeflow.Persist Mldong.Jeeflow.Repository.MySql Mldong.Jeeflow.Facade; do
+            for f in artifacts/"$pkg".*.nupkg; do
+              dotnet nuget push "$f" \
+                --api-key "$NUGET_API_KEY" \
+                --source https://api.nuget.org/v3/index.json \
+                --skip-duplicate
+            done
+          done
