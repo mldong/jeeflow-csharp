@@ -46,7 +46,11 @@ jobs:
             cd /java_projects/jeeflow/demo
             docker load -i jeeflow-csharp-demo.tar
             docker stop jeeflow-csharp-demo 2>/dev/null && docker rm jeeflow-csharp-demo 2>/dev/null || true
+            # seccomp=unconfined 与 moon 同款必配（D-M5-2 同根因）：宿主 docker 18.09 老 seccomp
+            # 白名单拦 CoreCLR 现代 syscall，表现为 0x80070008 拒启循环（run 34008998095/34009592929
+            # 两连挂，A/B 实证非内存问题）。宿主 docker 升级含新默认 profile 后可回收。
             docker run -d --name jeeflow-csharp-demo --restart always \
+              --security-opt seccomp=unconfined \
               -p 16087:8093 \
               jeeflow-csharp-demo:latest
             rm -f jeeflow-csharp-demo.tar
