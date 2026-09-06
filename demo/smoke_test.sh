@@ -24,6 +24,10 @@ echo "── 路由 ──"
 HEALTH=$(curl -s "$BASE/health")
 echo "$HEALTH" | grep -q '"engine":"jeeflow-csharp"' && ok "health" || fail "health → $HEALTH"
 
+# T003：启动后已有业务种子数据，先 reset 清场，保证本冒烟从干净状态跑
+# （reset 会重载种子 + 复跑业务 driver，"15 共享流程种子"断言仍成立）
+curl -s -X POST "$BASE/api/reset" > /dev/null
+
 echo "── 种子契约 ──"
 PAGE=$(wf processDefine/page '{"pageNum":1,"pageSize":5}')
 check_code0 "$PAGE" "processDefine/page 五键"

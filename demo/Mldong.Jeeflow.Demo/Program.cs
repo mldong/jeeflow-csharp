@@ -36,6 +36,12 @@ ServiceContext BuildContext()
 var context = BuildContext();
 var facade = new JeeflowFacade(context);
 
+// T003：业务数据种子（引擎真实启动 16 进行中 + 9 已完成 + 8 委托），memory 库才有意义
+if (store == "memory")
+{
+    await BusinessSeed.SeedAsync(facade);
+}
+
 var app = builder.Build();
 app.UseCors();
 
@@ -47,13 +53,14 @@ app.MapGet("/health", () => Results.Json(new
     store,
 }));
 
-// POST /api/reset：memory 重建状态 + 重载种子；mysql 共享库仅回 ok（对齐 moon 口径）
-app.MapPost("/api/reset", () =>
+// POST /api/reset：memory 重建状态 + 重载种子 + 复跑业务种子；mysql 共享库仅回 ok（对齐 moon 口径）
+app.MapPost("/api/reset", async () =>
 {
     if (store == "memory")
     {
         context = BuildContext();
         facade = new JeeflowFacade(context);
+        await BusinessSeed.SeedAsync(facade);
     }
     return Results.Json(new { code = 0, msg = "成功" });
 });
