@@ -14,6 +14,11 @@ COPY --from=build /app .
 # flows 种子：JEEFLOW_FLOWS_DIR 优先于候选探测（见 demo FlowsSeed.ResolveFlowsDir）
 COPY flows /flows
 ENV ASPNETCORE_URLS=http://0.0.0.0:8093 \
-    JEEFLOW_FLOWS_DIR=/flows
+    JEEFLOW_FLOWS_DIR=/flows \
+    # 演示档低内存配置（托管机 8G 无 swap 常年 6G 占用）：工作站 GC + 堆硬上限 256MB，
+    # 实测常驻 ~22MB。Server GC 默认在多核机启动期保留大块虚拟内存，内存紧张宿主上
+    # CoreCLR 直接 0x80070008 拒绝启动（run 34008998095 实证）
+    DOTNET_gcServer=0 \
+    DOTNET_GCHeapHardLimit=10000000
 EXPOSE 8093
 CMD ["dotnet", "Mldong.Jeeflow.Demo.dll"]
