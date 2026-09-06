@@ -39,15 +39,27 @@ jobs:
           user: mldong
 
       # 拓扑序：Core → Persist / Repository.MySql → Facade
+      # 失败时输出尾部以 ::error:: 吐成 annotation、全文进 Job Summary（公开仓可匿名读，便于无 admin 权限时排障）
       - name: Push
         env:
           NUGET_API_KEY: ${{ steps.login.outputs.nuget-api-key }}
         run: |
+          rc_all=0
           for pkg in Mldong.Jeeflow.Core Mldong.Jeeflow.Persist Mldong.Jeeflow.Repository.MySql Mldong.Jeeflow.Facade; do
             for f in artifacts/"$pkg".*.nupkg; do
-              dotnet nuget push "$f" \
+              echo "== push $f =="
+              out=$(dotnet nuget push "$f" \
                 --api-key "$NUGET_API_KEY" \
                 --source https://api.nuget.org/v3/index.json \
-                --skip-duplicate
+                --skip-duplicate 2>&1) && rc=0 || rc=$?
+              echo "$out"
+              { echo "### $f (exit=$rc)"; echo '```'; echo "$out"; echo '```'; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+              if [ "$rc" -ne 0 ]; then
+                rc_all=$rc
+                echo "$out" | tail -6 | while IFS= read -r line; do
+                  echo "::error::[$f] ${line:0:250}"
+                done
+              fi
             done
           done
+          exit "$rc_all"
