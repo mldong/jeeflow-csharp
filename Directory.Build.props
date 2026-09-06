@@ -11,12 +11,18 @@
     <InvariantGlobalization>false</InvariantGlobalization>
     <CompressionEnabled>false</CompressionEnabled>
     <!-- 版本线：NuGet 独立 1.0.x（方案 §9 O1） -->
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <Authors>mldong</Authors>
     <Product>jeeflow</Product>
     <Description>jeeflow 工作流引擎 C#/.NET 实现（第 8 语言）</Description>
     <RepositoryUrl>https://github.com/mldong/jeeflow-csharp</RepositoryUrl>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <!-- README 随包展示（nuget.org 包页）；联邦兄弟仓 LICENSE 均 Apache-2.0，1.0.1 对齐 -->
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- 4 个包统一嵌仓库根 README（路径锚定 props 文件所在目录，与项目位置无关） -->
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
 </Project>

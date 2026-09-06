@@ -1,5 +1,13 @@
 # C# 引擎 Changelog
 
+## v1.0.1（2026-09-06 · 包元数据完善）
+
+- 四包内嵌 README（nuget.org 包页直接展示，消除 "missing a README" 警告）+ `PackageLicenseExpression`
+  MIT → **Apache-2.0**（对齐联邦七兄弟仓 LICENSE；1.0.0 已发 MIT 属首发笔误）
+- 仓库 README 全面扩写：架构图/包矩阵/快速开始（内存与 MySQL 双装配）/契约速览/测试矩阵/文档索引/发版通道
+- 补 LICENSE 文件（Apache-2.0，与 java/php/rust/moon 同文本）
+- 发版通道顺带修复留档：NuGet/login@v1 输出名为大写 `NUGET_API_KEY`（1.0.0 首发时实证）
+
 ## v1.0.0（2026-09-06 · 首发就绪）
 
 - 引擎全量移植（第 8 语言）：start/execute/jump/jumpToEnd/rollbackToOperator 全 async 五方法；
