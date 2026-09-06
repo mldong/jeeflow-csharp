@@ -42,7 +42,8 @@ jobs:
       # 失败时输出尾部以 ::error:: 吐成 annotation、全文进 Job Summary（公开仓可匿名读，便于无 admin 权限时排障）
       - name: Push
         env:
-          NUGET_API_KEY: ${{ steps.login.outputs.nuget-api-key }}
+          # 注意：NuGet/login@v1 的输出名是大写 NUGET_API_KEY（区分大小写，小写取到空）
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
         run: |
           rc_all=0
           for pkg in Mldong.Jeeflow.Core Mldong.Jeeflow.Persist Mldong.Jeeflow.Repository.MySql Mldong.Jeeflow.Facade; do
