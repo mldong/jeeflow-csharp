@@ -1,0 +1,14 @@
+.git
+.github
+bin
+obj
+artifacts
+docs
+tests/bin
+tests/obj
+demo/Mldong.Jeeflow.Demo/bin
+demo/Mldong.Jeeflow.Demo/obj
+demo/Mldong.Jeeflow.Consistency/bin
+demo/Mldong.Jeeflow.Consistency/obj
+*.md
+!README.md

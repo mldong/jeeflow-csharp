@@ -1,0 +1,71 @@
+name: Demo Deploy
+
+# csharp demo 常驻部署（对齐 jeeflow-moon demo-deploy 先例）：
+# tag v* / 手动触发 → CI ubuntu docker 多阶段构建（sdk:10.0 → aspnet:10.0）→ 镜像 tar →
+# 托管机 16087:8093 → health 轮询 + T2 冒烟门禁 → 悬空层清理。
+# 前置 secrets（与 mldong/jeeflow-moon 同名同值，首次启用前在仓 Settings→Secrets 配置）：
+#   DEPLOY_HOST / DEPLOY_SSH_KEY
+# 部署后需 nginx /csharp-api/ 段指向 localhost:16087（见 deploy/nginx-csharp-api.conf）。
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    name: Build & Deploy C# demo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -f Dockerfile.demo -t jeeflow-csharp-demo:latest .
+
+      - name: Export image
+        run: |
+          docker save jeeflow-csharp-demo:latest -o jeeflow-csharp-demo.tar
+          chmod 644 jeeflow-csharp-demo.tar
+
+      - name: Upload to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: root
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: jeeflow-csharp-demo.tar,demo/smoke_test.sh
+          target: /java_projects/jeeflow/demo/
+
+      - name: Load image and restart
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: root
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd /java_projects/jeeflow/demo
+            docker load -i jeeflow-csharp-demo.tar
+            docker stop jeeflow-csharp-demo 2>/dev/null && docker rm jeeflow-csharp-demo 2>/dev/null || true
+            docker run -d --name jeeflow-csharp-demo --restart always \
+              -p 16087:8093 \
+              jeeflow-csharp-demo:latest
+            rm -f jeeflow-csharp-demo.tar
+            # 冷启动 + seed 装载需数秒：轮询等待而非固定 sleep
+            ok=""
+            for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+              sleep 2
+              if curl -sf http://127.0.0.1:16087/health; then ok=1; break; fi
+              echo "waiting ($i/15)..."
+            done
+            if [ -z "$ok" ]; then
+              echo "health failed"
+              docker ps -a --filter name=jeeflow-csharp-demo
+              docker logs jeeflow-csharp-demo 2>&1 | tail -80
+              exit 1
+            fi
+            # 部署后 T2 冒烟门禁（与 moon 同口径：health 只证进程活着，冒烟跑全链路）
+            sed -i 's/\r$//' /java_projects/jeeflow/demo/demo/smoke_test.sh
+            bash /java_projects/jeeflow/demo/demo/smoke_test.sh http://127.0.0.1:16087
+            # 部署尾清理悬空层（教训见 moon demo-deploy：多次部署累积会填满 40G 盘）
+            docker image prune -f >/dev/null 2>&1 || true
+            echo "✅ C# demo deployed (port 16087->8093)"

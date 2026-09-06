@@ -1,0 +1,19 @@
+# jeeflow-csharp demo —— 对齐 moon/rust 先例：CI/构建机 docker 多阶段构建 → 托管机 load 常驻。
+# 构建阶段 SDK 10 镜像（net10+net8 目标包齐全）；运行阶段仅 aspnet 运行时（镜像 ~500MB）。
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+COPY Jeeflow.sln Directory.Build.props Directory.Packages.props ./
+COPY src ./src
+COPY demo ./demo
+COPY tests ./tests
+RUN dotnet publish demo/Mldong.Jeeflow.Demo -c Release -o /app
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
+WORKDIR /app
+COPY --from=build /app .
+# flows 种子：JEEFLOW_FLOWS_DIR 优先于候选探测（见 demo FlowsSeed.ResolveFlowsDir）
+COPY flows /flows
+ENV ASPNETCORE_URLS=http://0.0.0.0:8093 \
+    JEEFLOW_FLOWS_DIR=/flows
+EXPOSE 8093
+CMD ["dotnet", "Mldong.Jeeflow.Demo.dll"]
