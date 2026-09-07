@@ -212,8 +212,9 @@ public class TableReader
 /// <summary>
 /// 元数据驱动的动态读取引擎（issues/23 读侧）——按 relTableName + process_instance_id 回显业务数据，
 /// 按 storageType 反序列化组装；无元数据回落原始行。
+/// 实现 IBizDataReader：Facade bizData 读侧按该接口取 reader（签名本就一致，issues/109 漏声明）。
 /// </summary>
-public class MetaTableReader
+public class MetaTableReader : IBizDataReader
 {
     private readonly TableReader _reader;
     private readonly IDynamicMetaProvider _provider;

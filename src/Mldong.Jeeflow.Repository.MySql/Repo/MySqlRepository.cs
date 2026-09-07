@@ -1140,12 +1140,16 @@ public class MySqlRepository : IProcessRepository
         return Json.ToJson(data);
     }
 
-    // ── NULL 安全读 ──
+    // ── NULL / 列型安全读 ──
+    // GetStr 不假设底层列型：宿主 schema 可能用 BIGINT 存 create_user/update_user（如 mldong 共享
+    // schema），GetString 会 InvalidCastException（issues/109）——统一 GetValue + invariant 转字符串。
 
     protected internal static string? GetStr(IDataRecord rs, string col)
     {
         var i = rs.GetOrdinal(col);
-        return rs.IsDBNull(i) ? null : rs.GetString(i);
+        if (rs.IsDBNull(i)) return null;
+        var v = rs.GetValue(i);
+        return v is string s ? s : Convert.ToString(v, System.Globalization.CultureInfo.InvariantCulture);
     }
 
     protected internal static long? GetLong(IDataRecord rs, string col)

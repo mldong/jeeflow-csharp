@@ -320,6 +320,9 @@ public class MySqlExtRepository : IProcessExtRepository
             var now = MySqlRepository.ToDb(s.CreateTime ?? Clock.Now);
             cmd.Parameters.Add(new MySqlParameter { Value = now });
             cmd.Parameters.Add(new MySqlParameter { Value = (object?)s.CreateUser ?? DBNull.Value });
+            // INSERT 列序含 update_time（11 列 11 占位符），漏绑会让 update_user 错位到
+            // update_time、末位占位符无参数可绑（issues/109 "Parameter index 10"）
+            cmd.Parameters.Add(new MySqlParameter { Value = MySqlRepository.ToDb(s.UpdateTime ?? s.CreateTime ?? Clock.Now) });
         }
         else
         {
