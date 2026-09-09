@@ -1,6 +1,6 @@
 # 业务数据入库（persist）
 
-`Mldong.Jeeflow.Persist`：流程变量按元数据写入业务表（issues/18~26 全契约）。
+`Mldong.Jeeflow.Persist`：流程变量按元数据写入业务表（契约全覆盖）。
 依赖仅 Core + BCL（System.Data.Common），适配任意 ADO.NET 驱动。
 
 ## 组装（引擎零改动，postInterceptors 声明名挂载）

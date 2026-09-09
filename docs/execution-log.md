@@ -39,7 +39,7 @@
 **产物**
 
 - Core 全模块（方案 §3.1 行 1）：model（聚合根/PageQuery/PageResult/UserInfo/FlowData）、spi（全 async 接口 + POCO ServiceContext + JeeflowQueryParser + DefaultActionPermissionProvider + DefaultExpressionEvaluator）、engine（JeeflowEngine 全 async 五方法 + Execution）、parser（ModelParser LogicFlow→模型树）、handler（CreateTask/Countersign/EndProcess/MergeBranch/StartSubProcess）、event（ProcessEvent + 逐监听器隔离 Publisher）、metadata（EnumDictRegistry 7 键 + HandlerRegistry FQCN 清单 + 内置 7 assignmentHandler）、memory（MemoryRepository + MemoryExtRepository，行为对齐 JDBC）、json（FlowData + DefaultJsonProvider + Outbound 出口层）、error、id_gen、IClock。
-- MemoryRepository 关键语义：id 由仓储 saveXxx 分配（IIdGenerator SPI，对齐 Java JDBC）；findInstanceById 水合 tasks（issues/89）；updateInstance 级联任务状态（v1.0.1，不含 business_no 列——JDBC SQL 口径）；saveTask 参与人全量覆盖 / addTaskActor 去重追加；分页白名单 + 默认 id DESC + 五键；stats 纯列查询 9 方法。
+- MemoryRepository 关键语义：id 由仓储 saveXxx 分配（IIdGenerator SPI，对齐 Java JDBC）；findInstanceById 水合 tasks；updateInstance 级联任务状态（v1.0.1，不含 business_no 列——JDBC SQL 口径）；saveTask 参与人全量覆盖 / addTaskActor 去重追加；分页白名单 + 默认 id DESC + 五键；stats 纯列查询 9 方法。
 
 **用例数**：`dotnet test`（memory）**100 用例全绿**，构成：
 - spike 10（async/雪花/出口三态审计/骨架/元数据）
@@ -64,7 +64,7 @@
 
 **产物**
 
-- `MySqlRepository`（IProcessRepository 全 21+ 方法，SQL 逐条对齐 JdbcProcessRepository）：定义/实例/任务/参与人/抄送写读、分页五键（白名单 buildWhere/buildOrder + LIMIT/OFFSET 内联非负整数 C21）、NULL 安全读（GetStr/GetLong/GetInt/GetDateTime/GetBytes 显式 DBNull）、聚合水合（findInstanceById 级联 tasks，issues/89）、updateInstance 级联任务状态（v1.0.1）、saveTask 参与人全量覆盖 / addTaskActor 去重追加、stats 纯列 9 方法（C23，avg int 出参 issues/105）。
+- `MySqlRepository`（IProcessRepository 全 21+ 方法，SQL 逐条对齐 JdbcProcessRepository）：定义/实例/任务/参与人/抄送写读、分页五键（白名单 buildWhere/buildOrder + LIMIT/OFFSET 内联非负整数 C21）、NULL 安全读（GetStr/GetLong/GetInt/GetDateTime/GetBytes 显式 DBNull）、聚合水合（findInstanceById 级联 tasks）、updateInstance 级联任务状态（v1.0.1）、saveTask 参与人全量覆盖 / addTaskActor 去重追加、stats 纯列 9 方法（C23，avg int 出参）。
 - `MySqlExtRepository`（14 方法）：design/his/surrogate 全 CRUD+分页；removeDesign 级联删历史；getSurrogate operator/enabled/surrogate<>operator/时间窗/精确优先全流程兜底（id DESC LIMIT 1）。
 - `MySqlTransactionTemplate` 真实现：单连接 BeginTransactionAsync → AsyncLocal 环境连接+环境事务（MySqlConnector 强制命令绑 Transaction）→ commit/rollback；仓储命令统一经 NewCmd 自动绑定活动事务。
 - `JeeflowEngine` 命令级信号量串行化（.NET 多线程下"单线程事件循环"等价物）——并发办理同任务读-改-写守卫天然原子。
@@ -91,15 +91,15 @@
 **产物**
 
 - `Mldong.Jeeflow.Persist`（依赖仅 Core + BCL System.Data.Common，零第三方）：
-  - `IDynamicTableWriter`/`DbDynamicTableWriter`（T9）：information_schema 列探测 schema 限定 DATABASE()（C18）、宽松列匹配驼峰↔下划线（issues/20）、主键非自增无生成器显式报错（C18/issues/21）、参数化 INSERT、幂等 exists、系统字段补齐 apply_user_id 优先（C17/issues/19）、表名安全（sys_ 拒绝）、值转换（LocalDateTime→串、容器→JSON）。
-  - `MetaTableWriter`（NORMAL/JSON/EXPAND/ONE2ONE·ONE2MANY 子表递归；子表继承 apply_user_id putIfAbsent——C17/issues/24；无元数据回落基础 writer）。
+  - `IDynamicTableWriter`/`DbDynamicTableWriter`（T9）：information_schema 列探测 schema 限定 DATABASE()（C18）、宽松列匹配驼峰↔下划线、主键非自增无生成器显式报错（C18）、参数化 INSERT、幂等 exists、系统字段补齐 apply_user_id 优先（C17）、表名安全（sys_ 拒绝）、值转换（LocalDateTime→串、容器→JSON）。
+  - `MetaTableWriter`（NORMAL/JSON/EXPAND/ONE2ONE·ONE2MANY 子表递归；子表继承 apply_user_id putIfAbsent——C17/；无元数据回落基础 writer）。
   - `MetaTableReader`+`TableReader`（bizData 回显：storageType 反序列化组装 + 无元数据回落原始行）。
-  - `PersistPostInterceptor`（ARCHIVE 缺省结束归档 FINISHED+AGREE INSERT / SYNC 发起 INSERT→任务节点 UPDATE→结束定稿；幂等 exists + 节点级 markChain 防同链双触发（C16）；字段权限双格式键只读/隐藏不写穿（C19/issues/25）；状态字段 {节点ID}_{状态码} 列探测；relTableName 回落 name；writer 未注入静默跳过）。
-- `Mldong.Jeeflow.Facade`：`FlowAsync/FlowJsonAsync` 45 action 全量（dispatch switch + unknown 兜底 99999999）；契约出口层经 Core Outbound（id 字符串化递归含复数、时间格式化、恒五键、stats int 出参）；入口 C3 双收/C15 ids 优先空报错/C26 时间双格式；stats 3 action 全纯列（C23/issues/105，todayNew 经 Clock）；bizData 经 ctx.BizDataReader（IBizDataReader，未注册显式报错）。
+  - `PersistPostInterceptor`（ARCHIVE 缺省结束归档 FINISHED+AGREE INSERT / SYNC 发起 INSERT→任务节点 UPDATE→结束定稿；幂等 exists + 节点级 markChain 防同链双触发（C16）；字段权限双格式键只读/隐藏不写穿（C19）；状态字段 {节点ID}_{状态码} 列探测；relTableName 回落 name；writer 未注入静默跳过）。
+- `Mldong.Jeeflow.Facade`：`FlowAsync/FlowJsonAsync` 45 action 全量（dispatch switch + unknown 兜底 99999999）；契约出口层经 Core Outbound（id 字符串化递归含复数、时间格式化、恒五键、stats int 出参）；入口 C3 双收/C15 ids 优先空报错/C26 时间双格式；stats 3 action 全纯列（C23/，todayNew 经 Clock）；bizData 经 ctx.BizDataReader（IBizDataReader，未注册显式报错）。
 
 **用例数**：全套件 **153/153 全绿**（SKIP_MYSQL=1 时 MySQL 13 个 vacuous pass）
 - Persist T0 9（fake writer 录制：ARCHIVE 时机/幂等/上下文字段、SYNC 权限过滤不写穿/结束定稿、同链防重、表名安全、FieldMeta、子表继承 apply_user）
-- Facade 22（45 action dispatch 全覆盖无 unknown（读 action-manifest.json 断言 45）、未知 action、五键+出口 id string、detail 不存在/双收、deploy 递增/redeploy 保 version（issues/59）、startAndExecute 出口 string id、todo/doneList operator 过滤、execute submitType 路由（2→45/20 软拒绝 flag 注入）、非处理人负向、instanceDetail 契约（formData/ext/isFirstTaskNode）、highLight 决策 true 边（C14）、approvalRecord 数字 code（C5）、taskDetail form+ext（issues/62）、设计生命周期、listByType 分组、委托 save/update/detail/remove（C26/issues/77）、bizData 未注册显式错、getLastByName、stats overview/trend/group 契约（缺参显式错/durationBucket 4 桶）、出口大数三态真流程审计、upAndDown 双键、withdraw）
+- Facade 22（45 action dispatch 全覆盖无 unknown（读 action-manifest.json 断言 45）、未知 action、五键+出口 id string、detail 不存在/双收、deploy 递增/redeploy 保 version、startAndExecute 出口 string id、todo/doneList operator 过滤、execute submitType 路由（2→45/20 软拒绝 flag 注入）、非处理人负向、instanceDetail 契约（formData/ext/isFirstTaskNode）、highLight 决策 true 边（C14）、approvalRecord 数字 code（C5）、taskDetail form+ext、设计生命周期、listByType 分组、委托 save/update/detail/remove（C26）、bizData 未注册显式错、getLastByName、stats overview/trend/group 契约（缺参显式错/durationBucket 4 桶）、出口大数三态真流程审计、upAndDown 双键、withdraw）
 - PersistSmoke（160 真库）2：T1M3 ARCHIVE 明文落库（days/reason/apply_user_id）+ T1M4 SYNC 字段权限不写穿（days 只读保持 3/999 被拒、reason 可编辑更新、tf_ 冗余落库、task1_10=10 状态列）
 - 抓出 2 个真 bug 并修：MySqlConnector 事务内命令必须绑 Transaction（M2 已修）+ DbDynamicTableWriter.ToDbValue 误把 string 当 IEnumerable 序列化成 JSON
 
@@ -118,7 +118,7 @@
 - 双存储：`JEEFLOW_DEMO_STORE=memory`（默认，种子 15 流程 define(id=1..N)+design+design_his）/ `mysql`（JEFFLOW_DB_* 共享库）。
 - 8 具名用户 SPI：IUserProvider / IOrgUserProvider（dept 领导 post2+/分管 post4+ boss 兜底/角色码匹配）/ IUserSearchProvider（关键词分页）。
 - flows resolver：JEEFLOW_FLOWS_DIR → 候选探测；java 兄弟目录存在则精确镜像（全量复制+删孤儿）。
-- 负向：body 解析失败 → 99999999 + stderr 日志（issues/88 口径）；未知 action 同码。
+- 负向：body 解析失败 → 99999999 + stderr 日志（口径）；未知 action 同码。
 - `demo/smoke_test.sh`：20 项端到端冒烟（入库）。
 - jeeflow-ui（独立仓 f1d889b）：`/csharp-api` 代理（→ :8093）+ `.env` VITE_BACKEND_CSHARP + `?lang=csharp` 分段（LANG_MAP + backends 数组）。
 

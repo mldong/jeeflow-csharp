@@ -10,7 +10,7 @@ ctx.ExpressionEvaluator = null;                       // 可空 → 内置 Defau
 ctx.IdGenerator         = null;                       // 可空 → 内置雪花（EPOCH=1288834974657）
 ctx.Clock               = null;                       // 可空 → SystemClock（测试注 FixedClock）
 ctx.TransactionTemplate = null;                       // 可空 → 语句级 autocommit（联邦现状）
-ctx.ActionPermissionProvider = null;                  // 可空 → 默认 wf:{action /→:}（issues/29）
+ctx.ActionPermissionProvider = null;                  // 可空 → 默认 wf:{action /→:}
 ```
 
 ## IProcessRepository（必需，全 async）
