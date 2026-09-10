@@ -8,7 +8,7 @@ jeeflow 工作流引擎的 C#/.NET 实现（第 8 语言）。引擎核心零第
 dotnet add package Mldong.Jeeflow.Core        # 引擎核心（零依赖）
 dotnet add package Mldong.Jeeflow.Repository.MySql   # MySQL 仓储
 dotnet add package Mldong.Jeeflow.Persist     # 业务数据动态入库（可选）
-dotnet add package Mldong.Jeeflow.Facade      # 45 action 统一门面
+dotnet add package Mldong.Jeeflow.Facade      # 40+ action 统一门面
 ```
 
 类库目标 `net8.0;net10.0` 双 TFM。
@@ -52,7 +52,7 @@ repo.Configure(ctx);
 - 语句级 autocommit 为联邦现状；注入 `ITransactionTemplate` 后同事务内所有仓储方法共用同一连接。
 - 建表 SQL 见包内 `schema/schema-mysql.sql`（5 张 `wf_*` 表，无自增，主键应用层生成）。
 
-## 统一门面（45 action）
+## 统一门面（40+ action）
 
 ```csharp
 var facade = new JeeflowFacade(ctx);

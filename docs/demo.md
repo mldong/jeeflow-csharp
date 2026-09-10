@@ -22,7 +22,7 @@ dotnet run --project demo/Mldong.Jeeflow.Demo
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/wf/{action}` | 45 action 全转发（body JSON → args；出口走契约 stringifier） |
+| POST | `/wf/{action}` | 40+ action 全转发（body JSON → args；出口走契约 stringifier） |
 | GET | `/health` | `{status, engine, store}` |
 | GET | `/api/stats?operator=` | `{todoCount, instanceCount}` |
 | POST | `/api/reset` | memory：重建+重载种子；mysql：回 ok |
