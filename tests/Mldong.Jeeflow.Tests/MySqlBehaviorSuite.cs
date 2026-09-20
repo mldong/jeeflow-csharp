@@ -1,5 +1,6 @@
 using Xunit;
 using Mldong.Jeeflow.Core;
+using Mldong.Jeeflow.Facade;
 using Mldong.Jeeflow.Repository.MySql;
 using MySqlConnector;
 
@@ -120,6 +121,51 @@ public class MySqlBehaviorSuite : RepositoryBehaviorSuite
         {
             await _fx.CleanupByMarkerAsync("T1CS-hydrate-pk");
         }
+    }
+
+    [Fact]
+    public async Task T1M5_WithdrawPersistsTaskState30()
+    {
+        if (Skip) return; // SKIP_MYSQL=1
+        // issues/113：门面 withdraw 须把全部进行中任务以 30（WITHDRAW）落 MySQL。
+        // v1.0.1 的 updateInstance 级联在 C# 侧此前从未对真库验过撤回路径，
+        // 门面用例 Withdraw_ViaFacade 也只断到实例态。
+        var (_, _, repo) = Build();
+        var defineId = await _fx.SaveT1DefineAsync("withdraw-30");
+        var inst = await _fx.Engine.StartProcessInstanceByIdAsync(defineId, "applicant",
+            new FlowData { [FlowConst.BusinessNo] = "T1CS-withdraw-30" });
+        var apply = await FindDoingByActorAsync(repo, inst.InstanceId!.Value, "applicant");
+        await _fx.Engine.ExecuteProcessTaskAsync(apply.TaskId!.Value, "applicant", new FlowData());
+        var leader = await FindDoingByActorAsync(repo, inst.InstanceId!.Value, "leader");
+        try
+        {
+            var facade = new JeeflowFacade(_fx.Ctx);
+            var resp = await facade.FlowAsync("processInstance/withdraw",
+                new FlowData { ["id"] = inst.InstanceId!.Value, ["operator"] = "applicant" });
+            Assert.Equal(0, resp["code"]);
+
+            // 直查库表，绕开聚合水合与内存别名：确证落库 30 而非 99（ABANDON）
+            Assert.Equal((int)WfTaskState.Withdraw, await TaskStateOfAsync(leader.TaskId!.Value));
+            // 已完成的任务不得被撤回改写（仍是 20）
+            Assert.Equal((int)WfTaskState.Finished, await TaskStateOfAsync(apply.TaskId!.Value));
+            Assert.Empty(await repo.FindDoingTasksAsync(inst.InstanceId!.Value, null));
+            Assert.Equal((int)WfInstanceState.Withdraw,
+                (await repo.FindInstanceByIdAsync(inst.InstanceId!.Value))!.State);
+        }
+        finally
+        {
+            await _fx.CleanupByMarkerAsync("T1CS-withdraw-30");
+            _fx.RemoveDefine(defineId);
+        }
+    }
+
+    private async Task<int> TaskStateOfAsync(long taskId)
+    {
+        await using var conn = await _fx.Factory.OpenAsync();
+        await using var cmd = new MySqlCommand(
+            "SELECT task_state FROM wf_process_task WHERE id = @id", conn);
+        cmd.Parameters.AddWithValue("@id", taskId);
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync());
     }
 
     [Fact]

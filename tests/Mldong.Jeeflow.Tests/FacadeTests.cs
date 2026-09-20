@@ -504,11 +504,18 @@ public class FacadeTests : IDisposable
     public async Task Withdraw_ViaFacade()
     {
         var iid = await SeedStartedInstanceAsync("WDF");
+        var doing = await _repo.FindDoingTasksAsync(iid, null);
+        Assert.NotEmpty(doing);
         var resp = await _facade.FlowAsync("processInstance/withdraw",
             new FlowData { ["id"] = iid, ["operator"] = "user1" });
         Assert.Equal(0, resp["code"]);
         // C28：实例 30 + 任务 30（非 45）
         Assert.Equal((int)WfInstanceState.Withdraw, (await _repo.FindInstanceByIdAsync(iid))!.State);
+        // issues/113：原 doing 任务须落 30（WITHDRAW），不能落 99（ABANDON）——
+        // 只断"实例态 + doing 清空"两种码值都满足，go/python/node/rust 就是这么漏掉的
+        foreach (var t in doing)
+            Assert.Equal((int)WfTaskState.Withdraw, (await _repo.FindTaskByIdAsync(t.TaskId))!.TaskState);
+        Assert.Empty(await _repo.FindDoingTasksAsync(iid, null));
     }
 }
 
