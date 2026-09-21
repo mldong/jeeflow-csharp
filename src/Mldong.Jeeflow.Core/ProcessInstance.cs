@@ -143,12 +143,12 @@ public class ProcessInstance
     /// <summary>创建普通任务。</summary>
     public ProcessTask CreateTask(
         TaskModel taskModel, string? displayName, List<string> actorIds,
-        string? op, IClock? clock = null)
+        string? op, long? parentTaskId, bool isFirstTaskNode, IClock? clock = null)
     {
         var task = ProcessTask.Create(
             InstanceId, taskModel.Name, displayName,
             taskModel.TaskType, taskModel.PerformType,
-            taskModel.Form, actorIds, op, clock);
+            taskModel.Form, actorIds, op, parentTaskId, isFirstTaskNode, clock);
         Tasks.Add(task);
         return task;
     }
@@ -160,7 +160,8 @@ public class ProcessInstance
     /// 在每位成员完成时推进创建下一位——任意时刻恰 1 个 DOING。PARALLEL / 未配置类型保持全员预创建。
     /// </summary>
     public List<ProcessTask> CreateCountersignTasks(
-        TaskModel taskModel, List<string> actorIds, string? op, IClock? clock = null)
+        TaskModel taskModel, List<string> actorIds, string? op,
+        long? parentTaskId, bool isFirstTaskNode, IClock? clock = null)
     {
         var list = new List<ProcessTask>();
         if (taskModel.CountersignType == WfCountersignType.Sequential)
@@ -169,7 +170,8 @@ public class ProcessInstance
             var first = ProcessTask.Create(
                 InstanceId, node, taskModel.DisplayName,
                 taskModel.TaskType, taskModel.PerformType,
-                taskModel.Form, new List<string> { actorIds[0] }, op, clock);
+                taskModel.Form, new List<string> { actorIds[0] }, op,
+                parentTaskId, isFirstTaskNode, clock);
             first.Variables[$"{FlowConst.CountersignOperatorList}_{node}"] = new List<object?>(actorIds);
             first.Variables[$"{FlowConst.LoopCounter}_{node}"] = 0;
             first.Variables[$"{FlowConst.NrOfInstances}_{node}"] = actorIds.Count;
@@ -182,7 +184,8 @@ public class ProcessInstance
             var task = ProcessTask.Create(
                 InstanceId, taskModel.Name, taskModel.DisplayName,
                 taskModel.TaskType, taskModel.PerformType,
-                taskModel.Form, new List<string> { actorId }, op, clock);
+                taskModel.Form, new List<string> { actorId }, op,
+                parentTaskId, isFirstTaskNode, clock);
             list.Add(task);
             Tasks.Add(task);
         }
@@ -199,7 +202,9 @@ public class ProcessInstance
             InstanceId, prevModel.Name, prevModel.DisplayName,
             prevModel.TaskType, prevModel.PerformType,
             prevModel.Form, new List<string> { currentTask.ActorId ?? "" },
-            currentTask.CreateUser, clock);
+            // 仍是拓扑版落点（P2 换血缘版）：parent＝被回退的那条任务
+            currentTask.CreateUser, currentTask.TaskId,
+            FlowUtil.IsFirstTaskName(model, prevModel.Name), clock);
         Tasks.Add(newTask);
         return newTask;
     }
@@ -209,7 +214,9 @@ public class ProcessInstance
     {
         var task = ProcessTask.Create(
             InstanceId, customModel.Name, customModel.DisplayName,
-            null, null, null, new List<string> { op ?? "" }, op, clock);
+            null, null, null, new List<string> { op ?? "" }, op,
+            // 自定义节点历史行不是 start 直接后继，也没有「刚办结的任务」可言
+            null, false, clock);
         task.TaskState = (int)WfTaskState.Finished;
         Tasks.Add(task);
         return task;

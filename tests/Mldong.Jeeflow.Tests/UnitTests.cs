@@ -123,7 +123,7 @@ public class AggregateTests
     public void ProcessTask_FinishGuards()
     {
         var task = ProcessTask.Create(1, "t", "T", WfTaskType.Major, WfPerformType.Normal, null,
-            new List<string> { "u1" }, "op");
+            new List<string> { "u1" }, "op", null, false);
         var ex = Assert.Throws<JeeflowException>(() => task.Finish("u2", null));
         Assert.Contains("不在任务参与者列表中", ex.Message);
         task.Finish("u1", null);
@@ -138,7 +138,7 @@ public class AggregateTests
     {
         // v1.0.1：flow.auto / flow.admin 放行（忽略大小写）
         var task = ProcessTask.Create(1, "t", "T", null, null, null,
-            new List<string> { "u1" }, "op");
+            new List<string> { "u1" }, "op", null, false);
         Assert.True(task.IsAllowed("flow.auto"));
         Assert.True(task.IsAllowed("FLOW.AUTO"));
         Assert.True(task.IsAllowed("flow.admin"));
@@ -151,7 +151,7 @@ public class AggregateTests
     {
         var inst = new ProcessInstance { InstanceId = 1, State = (int)WfInstanceState.Doing };
         var task = ProcessTask.Create(1, "apply", "申请", null, null, null,
-            new List<string> { "u1" }, "u1");
+            new List<string> { "u1" }, "u1", null, false);
         task.TaskId = 100L;
         inst.Tasks.Add(task);
         inst.CompleteTask(task.TaskId.Value, "u1", new FlowData { ["f_days"] = 3, ["memo"] = "x" });
@@ -172,7 +172,7 @@ public class AggregateTests
             Name = "n1", DisplayName = "串行", Form = "f",
             PerformType = WfPerformType.Countersign, CountersignType = WfCountersignType.Sequential,
         };
-        var seqTasks = inst.CreateCountersignTasks(seqModel, new List<string> { "a", "b", "c" }, "op");
+        var seqTasks = inst.CreateCountersignTasks(seqModel, new List<string> { "a", "b", "c" }, "op", null, false);
         Assert.Single(seqTasks); // C9：串行仅建首位
         Assert.Equal("a", seqTasks[0].ActorIds[0]);
         Assert.Equal(3, seqTasks[0].Variables.GetInt("nrOfInstances_n1"));
@@ -185,7 +185,7 @@ public class AggregateTests
             Name = "n2", DisplayName = "并行", Form = "f",
             PerformType = WfPerformType.Countersign, CountersignType = WfCountersignType.Parallel,
         };
-        var parTasks = inst.CreateCountersignTasks(parModel, new List<string> { "a", "b" }, "op");
+        var parTasks = inst.CreateCountersignTasks(parModel, new List<string> { "a", "b" }, "op", null, false);
         Assert.Equal(2, parTasks.Count); // 并行一次建全
         Assert.All(parTasks, t => Assert.Single(t.ActorIds));
     }
@@ -194,9 +194,9 @@ public class AggregateTests
     public void ProcessInstance_WithdrawOnlyDoingTasks()
     {
         var inst = new ProcessInstance { InstanceId = 1 };
-        var done = ProcessTask.Create(1, "a", "A", null, null, null, new List<string> { "u" }, "u");
+        var done = ProcessTask.Create(1, "a", "A", null, null, null, new List<string> { "u" }, "u", null, false);
         done.Finish("u", null);
-        var doing = ProcessTask.Create(1, "b", "B", null, null, null, new List<string> { "u" }, "u");
+        var doing = ProcessTask.Create(1, "b", "B", null, null, null, new List<string> { "u" }, "u", null, false);
         inst.Tasks.AddRange(new[] { done, doing });
         inst.Withdraw("admin");
         Assert.Equal((int)WfTaskState.Finished, done.TaskState); // 已完成不受影响
@@ -212,7 +212,7 @@ public class AggregateTests
         var model = ModelParser.Parse(System.Text.Encoding.UTF8.GetBytes(TestInfra.LoadFlow("02-multi-task")), ctx);
         var inst = new ProcessInstance { InstanceId = 1 };
         var current = ProcessTask.Create(1, "task2", "经理审批", null, null, null,
-            new List<string> { "manager" }, "manager");
+            new List<string> { "manager" }, "manager", null, false);
         current.Finish("manager", null);
         inst.Tasks.Add(current);
         var newTask = inst.RejectTask(model, current);

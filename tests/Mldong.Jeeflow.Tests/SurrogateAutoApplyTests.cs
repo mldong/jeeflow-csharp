@@ -521,7 +521,7 @@ public class SurrogateAutoApplyTests
         await LedgerAsync(h, "leader", "deputy");
         var applier = new ExtRepositorySurrogateApplier(h.Ctx);
         var task = ProcessTask.Create(1L, "task1", "上级审批", WfTaskType.Major,
-            WfPerformType.Normal, null, new List<string> { "leader" }, "applicant", h.Ctx.Clock);
+            WfPerformType.Normal, null, new List<string> { "leader" }, "applicant", null, false, h.Ctx.Clock);
         Assert.Null(task.TaskId);                        // 建单那一刻 taskId 还没有
 
         await applier.ApplyAsync(task, "simple", Now);
@@ -535,7 +535,7 @@ public class SurrogateAutoApplyTests
 
         // 非待办任务不追加（历史/已完成行不得被改写）
         var done = ProcessTask.Create(1L, "task9", "已办", WfTaskType.Major,
-            WfPerformType.Normal, null, new List<string> { "leader" }, "applicant", h.Ctx.Clock);
+            WfPerformType.Normal, null, new List<string> { "leader" }, "applicant", null, false, h.Ctx.Clock);
         done.TaskState = (int)WfTaskState.Finished;
         await applier.ApplyAsync(done, "simple", Now);
         Assert.Equal(new List<string> { "leader" }, done.ActorIds);

@@ -27,13 +27,18 @@ public class ProcessTask
     public DateTime? UpdateTime { get; set; }
     public string? UpdateUser { get; set; }
 
+    /// <summary>
+    /// 建单不变量（issues/121 P1）：本类唯一工厂，必写 ParentTaskId（发起 execution 无当前任务⇒0）
+    /// 与行级 isFirstTaskNode。两参无默认值 ⇒ 任何建单路径漏传即编译不过，不留静默漏写。
+    /// </summary>
     public static ProcessTask Create(
         long? instanceId, string? taskName, string? displayName,
         WfTaskType? taskType, WfPerformType? performType,
-        string? formKey, List<string>? actorIds, string? op, IClock? clock = null)
+        string? formKey, List<string>? actorIds, string? op,
+        long? parentTaskId, bool isFirstTaskNode, IClock? clock = null)
     {
         var now = (clock ?? SystemClock.Instance).Now;
-        return new ProcessTask
+        var task = new ProcessTask
         {
             ProcessInstanceId = instanceId,
             TaskName = taskName,
@@ -48,7 +53,12 @@ public class ProcessTask
             CreateUser = op,
             UpdateTime = now,
             UpdateUser = op,
+            ParentTaskId = parentTaskId ?? 0,
         };
+        // 门面出口现算版带「仅进行中」判定，已办结的历史行上恒 false，而血缘版回退
+        // 要读那条历史行决定参与者 ⇒ 标记必须建单时落库。
+        task.Variables[FlowConst.IsFirstTaskNode] = isFirstTaskNode;
+        return task;
     }
 
     // ═══ 命令方法 ═══

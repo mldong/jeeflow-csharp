@@ -140,12 +140,17 @@ public class CreateTaskHandler : IHandler
         List<ProcessTask> tasks;
         if (_taskModel.PerformType == WfPerformType.Countersign)
         {
+            // 建单不变量：parent＝本 execution 刚办结的任务；发起时为 null ⇒ 工厂落 0
             tasks = instance.CreateCountersignTasks(_taskModel, actors, op,
+                execution.ProcessTask?.TaskId,
+                FlowUtil.IsFirstTaskName(model, _taskModel.Name),
                 execution.Context.ClockOrDefault);
         }
         else
         {
             var task = instance.CreateTask(_taskModel, _taskModel.DisplayName, actors, op,
+                execution.ProcessTask?.TaskId,
+                FlowUtil.IsFirstTaskName(model, _taskModel.Name),
                 execution.Context.ClockOrDefault);
             tasks = new List<ProcessTask> { task };
         }
@@ -359,6 +364,9 @@ public class CountersignHandler : IHandler
             instance.InstanceId, node, _taskModel.DisplayName,
             _taskModel.TaskType, _taskModel.PerformType, _taskModel.Form,
             new List<string> { nextActor }, execution.Operator,
+            // 建单不变量：串行会签下一位成员的 parent＝刚办结的那一位
+            execution.ProcessTask?.TaskId,
+            FlowUtil.IsFirstTaskName(execution.ProcessModel!, node),
             execution.Context.ClockOrDefault);
         next.Variables[$"{FlowConst.CountersignOperatorList}_{node}"] =
             new List<object?>(ReadOperatorList(execution, node));
