@@ -244,7 +244,7 @@
           "method": "execute",
           "permission": "wf:processTask:execute",
           "req": "{processTaskId, operator?=user1, submitType?默认1(AGREE)}",
-          "resp": "submitType 分发：2→executeAndJumpToEnd；3→executeAndJumpTask(null 沿首入边回退)；4→executeAndJumpTask(taskName)；6→executeAndJumpToFirstTaskNode；20→countersignDisagreeFlag=1 execute；0/1/5→execute；出 ok；非处理人执行→99999999"
+          "resp": "submitType 分发：2→executeAndJumpToEnd；3→executeAndJumpTask(null＝退回上一步，血缘版：复活 task_parent_id 指向的历史行，见规范「引擎操作 04 · 退回上一步（血缘版）」)；4→executeAndJumpTask(taskName)；6→executeAndJumpToFirstTaskNode；20→countersignDisagreeFlag=1 execute；0/1/5→execute；出 ok；非处理人执行→99999999"
         },
         {
           "action": "processTask/detail",
