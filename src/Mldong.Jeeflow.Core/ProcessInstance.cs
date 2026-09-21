@@ -192,19 +192,59 @@ public class ProcessInstance
         return list;
     }
 
-    /// <summary>驳回任务（退回上一步）：沿首入边回退建新 todo，actor=上一节点操作人（C28 ROLLBACK）。</summary>
-    public ProcessTask? RejectTask(ProcessModel model, ProcessTask currentTask, IClock? clock = null)
+    /// <summary>
+    /// 驳回任务（退回上一步）——血缘版（规范 04 · 退回上一步）：上一步来源＝当前行的 ParentTaskId，
+    /// 复活调用方取出的那条历史行；不按模型入边拓扑推（拓扑版会回到本实例没走过的节点，且会
+    /// "静默返回 null 不建单"）。history 为 null ⇒ 20010007；canRejected 守卫不过 ⇒ 20010008。
+    /// 本栈异常无码位、出口统一 99999999，故码写在 msg 前缀（契约只要求"异常与 msg 可区分"）。
+    /// </summary>
+    public ProcessTask? RejectTask(ProcessModel model, ProcessTask currentTask, ProcessTask? history, IClock? clock = null)
     {
-        var previousTaskName = GetPreviousTaskName(model, currentTask.TaskName);
-        if (previousTaskName == null) return null;
-        if (model.GetNode(previousTaskName) is not TaskModel prevModel) return null;
+        const string NoLineage = "20010007: 上一步任务ID为空，无法驳回至上一步处理";
+        if (history == null) throw new JeeflowException(NoLineage);
+        var current = model.GetNode(currentTask.TaskName);
+        var parent = model.GetNode(history.TaskName);
+        if (current == null || parent == null || !FlowUtil.CanRejected(current, parent))
+        {
+            throw new JeeflowException("20010008: 无法驳回至上一步处理，请确认上一步骤并非fork、join、suprocess以及会签任务");
+        }
+
+        // 复活行的变量只带数据类键（tf_ 与 csv_/会签簿记都是"上次提交"的残留）
+        var vars = new FlowData();
+        foreach (var kv in history.Variables)
+        {
+            var k = kv.Key;
+            if (k == FlowConst.SubmitType || k == "taskName"
+                || k.StartsWith("tf_") || k.StartsWith("csv_")
+                || k.StartsWith("loopCounter") || k.StartsWith("nrOfInstances")
+                || k.StartsWith("operatorList")) continue;
+            vars[k] = kv.Value;
+        }
+        // 首任务节点那条由发起人提交 ⇒ 参与者取该行 u_userId；其余取该行办结人。
+        // 老行没这个键 ⇒ 按 false 处理（宁可派给该行 ActorId，也不用带"仅进行中"判定的现算值）。
+        var isFirstRow = vars.TryGetValue(FlowConst.IsFirstTaskNode, out var flag) && flag is true;
+        vars[FlowConst.IsFirstTaskNode] = isFirstRow;
+        var actor = "";
+        if (isFirstRow)
+        {
+            actor = vars.TryGetValue(FlowConst.UserUserId, out var uid) ? uid?.ToString() ?? "" : "";
+            if (string.IsNullOrEmpty(actor)) actor = Operator ?? "";
+        }
+        else actor = history.ActorId ?? "";
+        if (string.IsNullOrEmpty(actor)) throw new JeeflowException(NoLineage);
+
         var newTask = ProcessTask.Create(
-            InstanceId, prevModel.Name, prevModel.DisplayName,
-            prevModel.TaskType, prevModel.PerformType,
-            prevModel.Form, new List<string> { currentTask.ActorId ?? "" },
-            // 仍是拓扑版落点（P2 换血缘版）：parent＝被回退的那条任务
-            currentTask.CreateUser, currentTask.TaskId,
-            FlowUtil.IsFirstTaskName(model, prevModel.Name), clock);
+            InstanceId, history.TaskName, history.DisplayName,
+            history.TaskType, history.PerformType, history.FormKey,
+            new List<string> { actor },
+            history.CreateUser,
+            history.ParentTaskId,   // 随行拷贝＝"上一步的上一步"，与 mldong-boot2 一致
+            isFirstRow, clock);
+        newTask.Variables = vars;
+        if (current is TaskModel curTask && !string.IsNullOrEmpty(curTask.ExpireTime))
+        {
+            newTask.ExpireTime = FlowUtil.ProcessTime(curTask.ExpireTime, vars, clock ?? SystemClock.Instance);
+        }
         Tasks.Add(newTask);
         return newTask;
     }
@@ -260,12 +300,6 @@ public class ProcessInstance
             }
         }
         throw new JeeflowException($"未找到任务[{taskId}]或不在聚合根中");
-    }
-
-    private static string? GetPreviousTaskName(ProcessModel model, string? currentTaskName)
-    {
-        var node = model.GetNode(currentTaskName);
-        return node?.Inputs.Count > 0 ? node.Inputs[0].Source?.Name : null;
     }
 
     private void Touch(string? op, IClock? clock)

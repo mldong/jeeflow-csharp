@@ -482,15 +482,18 @@ public class SurrogateAutoApplyTests
     [Fact]
     public async Task S116_19_RollbackPath_AlsoAppliesSurrogate()
     {
-        // 条款 1：覆盖全部建任务路径——跳转/回退（ROLLBACK）建的新单同样要应用委托
+        // 条款 1：覆盖全部建任务路径——跳转/回退（ROLLBACK）建的新单同样要应用委托。
+        // issues/121 P2 血缘版：回退复活的是 apply 那条历史行，且它是首任务节点行 ⇒
+        // 参与者取该行 u_userId（发起人 applicant），不是执行回退的 leader。
+        // 台账延后到 task1 建单之后再配，保住"起点没有代理人"的自证力。
         var h = NewHarness();
-        await LedgerAsync(h, "leader", "deputy");
         var (iid, taskId) = await StartToLeaderTaskAsync(h);
+        await LedgerAsync(h, "applicant", "deputy");
 
         await h.Engine.ExecuteAndJumpTaskAsync(taskId, "leader", new FlowData(), null);
         var back = (await h.Repo.FindDoingTasksAsync(iid, null))[0];
         Assert.Equal("apply", back.TaskName);
-        Assert.Equal(new List<string> { "leader", "deputy" },
+        Assert.Equal(new List<string> { "applicant", "deputy" },
             await PersistedActorsAsync(h, back.TaskId!.Value));
     }
 

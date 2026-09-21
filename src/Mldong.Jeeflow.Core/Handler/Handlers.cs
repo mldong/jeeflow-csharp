@@ -41,6 +41,23 @@ public static class FlowUtil
             tm.To != null && tm.To.Equals(taskName, StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>
+    /// 能否退回到 parent —— 照 mldong-boot2 NodeModel.canRejected：自 current 的入边回溯，命中 parent 放行；
+    /// 入边来源是 fork/join/start 时**跳过该条入边、不再深入**（boot2 是 continue，不是穿越），其余来源递归。
+    /// subprocess 在 boot2 里被注释掉，等同普通节点。
+    /// </summary>
+    public static bool CanRejected(NodeModel current, NodeModel parent)
+    {
+        foreach (var tm in current.Inputs)
+        {
+            var source = tm.Source;
+            if (ReferenceEquals(source, parent)) return true;
+            if (source is ForkModel or JoinModel or StartModel) continue;
+            if (source != null && CanRejected(source, parent)) return true;
+        }
+        return false;
+    }
+
     /// <summary>解析期待完成时间（变量引用 / 相对时间 5s/10m/24h/3d / 绝对时间）。</summary>
     public static DateTime? ProcessTime(string? expireTime, FlowData args, IClock clock)
     {

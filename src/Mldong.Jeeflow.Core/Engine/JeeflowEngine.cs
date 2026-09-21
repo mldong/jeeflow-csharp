@@ -111,10 +111,14 @@ public class JeeflowEngine
             var model = exec.ProcessModel!;
             if (string.IsNullOrEmpty(nodeName))
             {
-                // ROLLBACK：沿首入边回退建新 todo（C28：实例保持 DOING，actor=上一节点操作人）
-                var newTask = exec.ProcessInstance!.RejectTask(model, exec.ProcessTask!,
-                    _context.ClockOrDefault);
-                if (newTask != null) exec.AddTask(newTask);
+                // issues/121 P2：ROLLBACK 走血缘版——按当前行的 ParentTaskId 从仓储取出历史行，
+                // 交给聚合根复活（取不到传 null，由聚合根报 20010007）。实例保持 DOING。
+                var current = exec.ProcessTask!;
+                var history = current.ParentTaskId is > 0
+                    ? await Repository.FindTaskByIdAsync(current.ParentTaskId)
+                    : null;
+                exec.AddTask(exec.ProcessInstance!.RejectTask(model, current, history,
+                    _context.ClockOrDefault)!);
             }
             else
             {

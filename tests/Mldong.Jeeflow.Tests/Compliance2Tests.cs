@@ -243,8 +243,8 @@ public class Compliance2Tests
     [Fact]
     public async Task SubmitType3_RollbackToPreviousStep_NewTodoForOperator()
     {
-        // Java 口径（JeeflowFacadeTest.testExecuteSubmitTypeBehavior）：
-        // task2 退回上一步 → task1 新待办，actor=退回操作人，实例保持 DOING(10)
+        // issues/121 P2 血缘版（对齐 Java 参考实现）：task2 退回 → 复活 task1 那条历史行，
+        // actor＝该行原办结人 leader（不是执行回退的 manager），实例保持 DOING(10)
         var (engine, repo) = TestInfra.NewEngine();
         var did = await TestInfra.SaveFlowDefineAsync(repo, "st3", TestInfra.LoadFlow("02-multi-task"));
         var iid = await TestInfra.StartAndApplyAsync(engine, repo, did);
@@ -255,7 +255,8 @@ public class Compliance2Tests
         var tasks = await repo.FindDoingTasksAsync(iid, null);
         Assert.NotEmpty(tasks);
         Assert.Equal("task1", tasks[0].TaskName);
-        Assert.Contains("manager", tasks[0].ActorIds);
+        Assert.Contains("leader", tasks[0].ActorIds);
+        Assert.DoesNotContain("manager", tasks[0].ActorIds);
         Assert.Equal((int)WfInstanceState.Doing,
             (await repo.FindInstanceByIdAsync(iid))!.State);
     }

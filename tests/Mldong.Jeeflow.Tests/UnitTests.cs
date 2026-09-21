@@ -205,20 +205,45 @@ public class AggregateTests
     }
 
     [Fact]
-    public void ProcessInstance_RejectTaskFollowsFirstInputEdge()
+    public void ProcessInstance_RejectTaskRevivesLineageParentRow()
     {
-        // RejectTask：沿首入边回退，actor=当前操作人（Java 口径）
+        // issues/121 P2 血缘版：上一步＝当前行 ParentTaskId 指的那条历史行，复活它。
+        // 夹具是 apply → task1 → task2 → task3 四级链（两步流里"上一节点"与"首任务节点"同格，断言恒真）
         var ctx = new ServiceContext(new MemoryRepository());
         var model = ModelParser.Parse(System.Text.Encoding.UTF8.GetBytes(TestInfra.LoadFlow("02-multi-task")), ctx);
-        var inst = new ProcessInstance { InstanceId = 1 };
+        var inst = new ProcessInstance { InstanceId = 1, Operator = "applicant" };
+        var applyRow = ProcessTask.Create(1, "apply", "申请", null, null, null,
+            new List<string> { "applicant" }, "applicant", null, true);
+        applyRow.TaskId = 11; applyRow.Finish("applicant", null);
+        var t1Row = ProcessTask.Create(1, "task1", "上级审批", null, null, null,
+            new List<string> { "leader" }, "leader", 11, false);
+        t1Row.TaskId = 12; t1Row.Finish("leader", null);
         var current = ProcessTask.Create(1, "task2", "经理审批", null, null, null,
-            new List<string> { "manager" }, "manager", null, false);
-        current.Finish("manager", null);
-        inst.Tasks.Add(current);
-        var newTask = inst.RejectTask(model, current);
-        Assert.NotNull(newTask);
-        Assert.Equal("task1", newTask!.TaskName);
-        Assert.Equal(new List<string> { "manager" }, newTask.ActorIds);
+            new List<string> { "manager" }, "manager", 12, false);
+        current.TaskId = 13; current.Finish("manager", null);
+        t1Row.Variables["tf_approvalComment"] = "上次填的意见";
+        t1Row.Variables[FlowConst.SubmitType] = 1;
+        inst.Tasks.AddRange(new[] { applyRow, t1Row, current });
+
+        var revived = inst.RejectTask(model, current, t1Row);
+        Assert.NotNull(revived);
+        Assert.Equal("task1", revived!.TaskName);
+        Assert.Equal(new List<string> { "leader" }, revived.ActorIds);
+        Assert.DoesNotContain("manager", revived.ActorIds);   // 不是执行回退的人
+        Assert.Equal(11, revived.ParentTaskId);               // 随行拷贝＝上一步的上一步
+        Assert.False((bool) revived.Variables[FlowConst.IsFirstTaskNode]!);
+        Assert.False(revived.Variables.ContainsKey(FlowConst.SubmitType), "复活行不该带 submitType 残留");
+        Assert.False(revived.Variables.ContainsKey("tf_approvalComment"), "复活行不该带 tf_ 残留");
+
+        // 负向 1：无血缘（取不到历史行）⇒ 20010007，不得静默不建单
+        var ex1 = Assert.Throws<JeeflowException>(() => inst.RejectTask(model, current, null));
+        Assert.Contains("20010007", ex1.Message);
+
+        // 负向 2：parent 不是 current 的祖先（这里是 task2 的**后继** task3）⇒ 20010008
+        var t3Row = ProcessTask.Create(1, "task3", "总监审批", null, null, null,
+            new List<string> { "boss" }, "boss", 13, false);
+        var ex2 = Assert.Throws<JeeflowException>(() => inst.RejectTask(model, current, t3Row));
+        Assert.Contains("20010008", ex2.Message);
     }
 }
 
