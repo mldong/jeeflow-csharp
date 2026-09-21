@@ -301,9 +301,7 @@ public class JeeflowEngine
         if (!_context.SurrogateAutoApply) return;
         try
         {
-            // 条款 1.1：processName 认流程定义 name（deploy 有 def.Name = model.Name 不变量，
-            // 与流程 JSON 的 name 同值；跨栈对拍与台账匹配一律认库内这一列）
-            var processName = exec.ProcessModel?.Name;
+            var processName = await ResolveSurrogateProcessNameAsync(exec);
             await _context.SurrogateApplierOrDefault.ApplyAsync(task, processName, _context.ClockOrDefault.Now);
         }
         catch (Exception e)
@@ -311,6 +309,31 @@ public class JeeflowEngine
             Console.Error.WriteLine(
                 $"[jeeflow] surrogate apply error, keep original actors: task={task.TaskName}: {e.Message}");
         }
+    }
+
+    /// <summary>
+    /// 解析当前流程名——契约 06 §4.5 <b>条款 1.1：流程模型 name 优先，模型未带 name 才回落
+    /// <c>wf_process_define.name</c></b>（不是反过来）。
+    ///
+    /// <para>取值口径以<b>模型 name</b>（流程 JSON 的 <c>ProcessModel.Name</c>）为准，依据是迁移基线：
+    /// 内置版 mldong-wf 的 <c>SurrogateInterceptor</c> 用的正是
+    /// <c>execution.getProcessModel().getName()</c>，Java 参考实现与之同构；用户在内置版配的委托
+    /// 迁到 jeeflow 后必须命中同一条。</para>
+    ///
+    /// <para><b>回落不是可省的兜底</b>：正常情况下 deploy 执行 <c>def.Name = model.Name</c> 让两者恒等，
+    /// 只有"模型缺 name"这种异常形态才会走到这里。若此时直接给 null/空串，按判据① 只能命中
+    /// 全流程兜底行，<b>该流程自己配的委托一条都查不到</b>（用户视角=委托静默失效）。</para>
+    /// </summary>
+    private async Task<string?> ResolveSurrogateProcessNameAsync(Execution exec)
+    {
+        var name = exec.ProcessModel?.Name?.Trim();
+        if (!string.IsNullOrEmpty(name)) return name;
+
+        var defineId = exec.ProcessInstance?.DefineId;
+        if (defineId == null) return null;
+        var define = await Repository.FindDefineByIdAsync(defineId);
+        var defineName = define?.Name?.Trim();
+        return string.IsNullOrEmpty(defineName) ? null : defineName;
     }
 
     /// <summary>fire「任务开始」事件（TASK_START）：落库后逐任务，sourceId=taskId 可被反查。</summary>

@@ -462,11 +462,31 @@ public class MySqlBehaviorSuite : RepositoryBehaviorSuite
         try
         {
             // ── 正向 + 条款 1.4（多条命中取 max id，SQL 侧 ORDER BY id DESC）──
-            await SeedSurrogateAsync(actor, "t1sur-agentOld", flowName, 1);
-            await SeedSurrogateAsync(actor, "t1sur-agentNew", flowName, 1);
+            // **夹具的 id 插入序刻意打乱**（919981 → 919983 → 919982，最大那条卡在中间，id 段沿用
+            // T1 专属 9xxxxx）：插入序与 id 序重合时，"取遍历末条"与"取 id 最大"给同一个答案，
+            // 条款 1.4 钉不住（Node 上轮实测发现的空转；内存仓侧同规矩，见 SurrogateAutoApplyTests）。
+            await SeedSurrogateAsync(actor, "t1sur-agentLow", flowName, 1, id: 919981);
+            await SeedSurrogateAsync(actor, "t1sur-agentHigh", flowName, 1, id: 919983); // id 最大 = 唯一正解
+            await SeedSurrogateAsync(actor, "t1sur-agentMid", flowName, 1, id: 919982);  // 插入序末条（诱饵）
             var taskId = await StartUntilApprovalAsync(defineId);
             var rows = await _fx.Repo.FindTaskActorsAsync(taskId);
-            Assert.Equal(new List<string> { actor, "t1sur-agentNew" }, rows);
+            Assert.Equal(new List<string> { actor, "t1sur-agentHigh" }, rows);
+
+            // 条款 1.4 + 条款 6：**同一份打乱序数据**也灌进内存仓，两仓 getSurrogate 必须同答案
+            // （SQL 侧 ORDER BY id DESC、内存侧按 id 数值挑最大——任一侧改成"按遍历序取"都会在这里露馅）
+            var memMax = NewMemoryExt();
+            foreach (var (agent, sid) in new (string, long)[]
+                     { ("t1sur-agentLow", 919981), ("t1sur-agentHigh", 919983), ("t1sur-agentMid", 919982) })
+                await memMax.SaveSurrogateAsync(new ProcessSurrogate
+                {
+                    Id = sid, ProcessName = flowName, Operator = actor, Surrogate = agent,
+                    Enabled = 1, CreateUser = "T1CS-SUR",
+                });
+            var probeAt = new DateTime(2026, 8, 1, 9, 0, 0); // 与夹具 FixedClock 同刻
+            Assert.Equal("t1sur-agentHigh", (await memMax.GetSurrogateAsync(actor, flowName, probeAt))?.Surrogate);
+            Assert.Equal(
+                (await memMax.GetSurrogateAsync(actor, flowName, probeAt))?.Surrogate,
+                (await _fx.ExtRepo.GetSurrogateAsync(actor, flowName, probeAt))?.Surrogate);
 
             // ── 判据①：空 processName = 全部流程兜底（精确名未命中时）──
             await ClearSurrogateRowsAsync();
@@ -527,10 +547,7 @@ public class MySqlBehaviorSuite : RepositoryBehaviorSuite
         {
             await ClearSurrogateRowsAsync();
             // 每判据一个干净的内存仓（与 SQL 侧「同样本只一条台账」严格对齐）
-            var memRepo = new MemoryRepository();
-            var memCtx = TestInfra.NewContext(memRepo);
-            memRepo.Configure(memCtx);
-            var memExt = new MemoryExtRepository(memRepo, memCtx);
+            var memExt = NewMemoryExt();
             // 同一份数据分别写进两仓，逐判据比对读侧结论
             await memExt.SaveSurrogateAsync(new ProcessSurrogate
             {
@@ -548,6 +565,15 @@ public class MySqlBehaviorSuite : RepositoryBehaviorSuite
             Assert.Equal(fromMem?.Surrogate, fromSql?.Surrogate); // 同栈两仓同答案
         }
         await ClearSurrogateRowsAsync();
+    }
+
+    /// <summary>一套干净的内存扩展仓储（条款 6「同栈两仓同答案」对拍用）。</summary>
+    private static MemoryExtRepository NewMemoryExt()
+    {
+        var memRepo = new MemoryRepository();
+        var memCtx = TestInfra.NewContext(memRepo);
+        memRepo.Configure(memCtx);
+        return new MemoryExtRepository(memRepo, memCtx);
     }
 
     /// <summary>01-simple 打补丁：define.name = content.name = flowName、审批节点参与者换成专属 actor（不干扰他组用例）。</summary>
@@ -581,10 +607,11 @@ public class MySqlBehaviorSuite : RepositoryBehaviorSuite
     }
 
     private async Task SeedSurrogateAsync(string op, string agent, string? processName, int enabled,
-        DateTime? start = null, DateTime? end = null)
+        DateTime? start = null, DateTime? end = null, long? id = null)
     {
         await _fx.ExtRepo.SaveSurrogateAsync(new ProcessSurrogate
         {
+            Id = id,
             ProcessName = processName,
             Operator = op,
             Surrogate = agent,
