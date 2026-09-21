@@ -194,7 +194,9 @@ public partial class JeeflowFacade
     {
         var instanceExt = ParseJsonMap(r.InstanceVariable);
         var ext = ParseJsonMap(r.Variable);
-        if (ext.Count == 0) ext = instanceExt;
+        // issues/121 P1：引擎建单必写的控制键不算「任务变量非空」，否则新建任务的 ext
+        // 永远不再回退实例变量（issues/82-3 既有契约）。
+        if (ext.Count == 0 || (ext.Count == 1 && ext.ContainsKey("isFirstTaskNode"))) ext = instanceExt;
         return new Dictionary<string, object?>
         {
             ["id"] = r.Id,
