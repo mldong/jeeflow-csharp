@@ -4,7 +4,7 @@ using Mldong.Jeeflow.Core;
 namespace Mldong.Jeeflow.Facade;
 
 /// <summary>
-/// 统一门面（对齐 Java JeeflowFacade，45 action）："接口即 POST + JSON body"风格单入口。
+/// 统一门面（对齐 Java JeeflowFacade，40+ action）："接口即 POST + JSON body"风格单入口。
 /// 恒 {code,msg,data} 信封；成功 code=0；失败只发明 99999999（不发明 9999xxxx）；
 /// unknown/action 兜底同码。出口纪律（C1/C2/C5/C7/C22 + CS1/CS2/CS4）由 <see cref="Outbound"/>
 /// 统一递归 stringifier 强制：id 全字符串化（含复数数组）、时间 yyyy-MM-dd HH:mm:ss、
@@ -74,6 +74,7 @@ public partial class JeeflowFacade
                 "processTask/candidatePage" => await CandidatePageAsync(args),
                 "processTask/surrogate" => await TaskSurrogateAsync(args),
                 "processTask/addCandidate" => await TaskSurrogateAsync(args),
+                "processTask/transfer" => await TaskTransferAsync(args),
                 "processTask/latest" => await TaskLatestAsync(args),
                 // ── 流程设计 ──
                 "processDesign/page" => await DesignPageAsync(args),
@@ -444,6 +445,12 @@ public partial class JeeflowFacade
     internal static string? ToStr(object? val) => val?.ToString();
 
     internal static string ToStr(object? val, string def) => val?.ToString() ?? def;
+
+    /// <summary>系统代执行（flow.auto）/ 超级管理员（flow.admin）放行——<c>IsAllowed</c> 既有约定，
+    /// 撤回（issues/114）与转办（issues/115）共用同一判据。</summary>
+    internal static bool IsPrivilegedOperator(string? op) =>
+        string.Equals(FlowConst.AutoId, op, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(FlowConst.AdminId, op, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>时间入参：`yyyy-MM-dd HH:mm:ss` 与 ISO T 双格式（C26/issues/77）。</summary>
     internal static DateTime? ParseTime(object? val)

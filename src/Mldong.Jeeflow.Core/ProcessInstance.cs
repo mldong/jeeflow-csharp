@@ -111,12 +111,17 @@ public class ProcessInstance
         Touch(op, clock);
     }
 
-    /// <summary>撤回（C28：实例 30 WITHDRAW + 任务 30，非 45）。</summary>
+    /// <summary>
+    /// 撤回（C28：实例 30 WITHDRAW + 任务 30，非 45；任务态也不是 99）。
+    /// issues/113/114：只改写<b>进行中</b>任务（已完成 20 / 已终止 40 行不得被撤回改写），
+    /// 且作用于整单（同实例全部进行中任务，不是只撤操作人自己那一条）；
+    /// 实例与被撤任务的 <c>update_user</c> 都回写为真实撤回人。
+    /// </summary>
     public void Withdraw(string? op, IClock? clock = null)
     {
         foreach (var task in Tasks)
             if (task.IsDoing())
-                task.Withdraw();
+                task.Withdraw(op, clock);
         State = (int)WfInstanceState.Withdraw;
         Touch(op, clock);
     }

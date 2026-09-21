@@ -168,6 +168,205 @@ public class MySqlBehaviorSuite : RepositoryBehaviorSuite
         return Convert.ToInt32(await cmd.ExecuteScalarAsync());
     }
 
+    // ═══ issues/113~115：撤回鉴权 + 转办（真库裸 SQL 读回）═══
+    // 断言一律绕开聚合水合与内存别名，直查 wf_process_task / wf_process_task_actor /
+    // wf_process_instance 列值——门面写没写进库，只有裸 SQL 说得清。
+
+    /// <summary>裸 SQL 取单列值（SQL NULL → C# null）。</summary>
+    private async Task<object?> ScalarOfAsync(string selectSql, long id)
+    {
+        await using var conn = await _fx.Factory.OpenAsync();
+        await using var cmd = new MySqlCommand(selectSql, conn);
+        cmd.Parameters.AddWithValue("@id", id);
+        var val = await cmd.ExecuteScalarAsync();
+        return val is DBNull ? null : val;
+    }
+
+    private Task<object?> TaskColumnOfAsync(long taskId, string column) =>
+        ScalarOfAsync($"SELECT {column} FROM wf_process_task WHERE id = @id", taskId);
+
+    private async Task<List<string>> ActorsOfAsync(long taskId)
+    {
+        await using var conn = await _fx.Factory.OpenAsync();
+        await using var cmd = new MySqlCommand(
+            "SELECT actor_id FROM wf_process_task_actor WHERE process_task_id = @id ORDER BY id ASC", conn);
+        cmd.Parameters.AddWithValue("@id", taskId);
+        var actors = new List<string>();
+        await using var rs = await cmd.ExecuteReaderAsync();
+        while (await rs.ReadAsync()) actors.Add(rs.GetString(0));
+        return actors;
+    }
+
+    /// <summary>门面待办行 id（真库分页 SQL：pta.actor_id JOIN）。</summary>
+    private static async Task<List<string>> TodoIdsAsync(JeeflowFacade facade, string actor)
+    {
+        var resp = await facade.FlowAsync("processTask/todoList", new FlowData { ["operator"] = actor });
+        Assert.True(Equals(0, resp["code"]), $"todoList msg={resp["msg"]}");
+        var data = (Dictionary<string, object?>)resp["data"]!;
+        return ((List<object?>)data["rows"]!)
+            .Select(r => ((Dictionary<string, object?>)r!)["id"]!.ToString()!)
+            .ToList();
+    }
+
+    private static async Task<List<string>> DoneIdsAsync(JeeflowFacade facade, string actor)
+    {
+        var resp = await facade.FlowAsync("processTask/doneList", new FlowData { ["operator"] = actor });
+        Assert.True(Equals(0, resp["code"]), $"doneList msg={resp["msg"]}");
+        var data = (Dictionary<string, object?>)resp["data"]!;
+        return ((List<object?>)data["rows"]!)
+            .Select(r => ((Dictionary<string, object?>)r!)["id"]!.ToString()!)
+            .ToList();
+    }
+
+    /// <summary>发起 + 办结 apply → leader 手上留一条 DOING 任务（T1 段专属 marker）。</summary>
+    private async Task<(long DefineId, long InstanceId, long TaskId, long ApplyTaskId)> SeedLeaderTaskAsync(
+        string marker)
+    {
+        var (_, _, repo) = Build();
+        var defineId = await _fx.SaveT1DefineAsync(marker);
+        var inst = await _fx.Engine.StartProcessInstanceByIdAsync(defineId, "applicant",
+            new FlowData { [FlowConst.BusinessNo] = "T1CS-" + marker });
+        var apply = await FindDoingByActorAsync(repo, inst.InstanceId!.Value, "applicant");
+        await _fx.Engine.ExecuteProcessTaskAsync(apply.TaskId!.Value, "applicant", new FlowData());
+        var leader = await FindDoingByActorAsync(repo, inst.InstanceId!.Value, "leader");
+        return (defineId, inst.InstanceId.Value, leader.TaskId!.Value, apply.TaskId!.Value);
+    }
+
+    [Fact]
+    public async Task T1M6_TransferPersistsActorsAndThreeTracesOverRealDb()
+    {
+        if (Skip) return; // SKIP_MYSQL=1
+        var (defineId, iid, taskId, _) = await SeedLeaderTaskAsync("transfer-trace");
+        try
+        {
+            var facade = new JeeflowFacade(_fx.Ctx);
+            var resp = await facade.FlowAsync("processTask/transfer", new FlowData
+            {
+                [FlowConst.ProcessTaskIdKey] = taskId,
+                ["fromActor"] = "leader",
+                ["toActor"] = "lisi",
+                ["reason"] = "出差一周",
+                ["operator"] = "leader",
+            });
+            Assert.True(Equals(0, resp["code"]), $"transfer msg={resp["msg"]}");
+
+            // 参与者行：leader 那行真删了、lisi 那行真加了（同 taskId，不新建任务）
+            Assert.Equal(new List<string> { "lisi" }, await ActorsOfAsync(taskId));
+            Assert.Equal((int)WfTaskState.Doing, await TaskStateOfAsync(taskId));
+
+            // 注意：严禁覆写 operator 列：DOING 任务该列必须仍是 SQL NULL（Java 已知偏差①，本栈不照抄）
+            var persistedOperator = await TaskColumnOfAsync(taskId, "operator");
+            Assert.True(persistedOperator == null,
+                $"转办覆写了 wf_process_task.operator（应恒 NULL），实得 {persistedOperator}");
+            // "办理人记谁"由 update_user 承载
+            Assert.Equal("leader", await TaskColumnOfAsync(taskId, "update_user"));
+
+            // variable 列 JSON 落地形状：六键固定 camelCase + time yyyy-MM-dd HH:mm:ss（非 ISO 方言）
+            var variable = (string?)(await TaskColumnOfAsync(taskId, "variable")) ?? "";
+            Assert.Contains(
+                "{\"submitType\":7,\"fromActor\":\"leader\",\"toActor\":\"lisi\"," +
+                "\"reason\":\"出差一周\",\"time\":\"2026-08-01 09:00:00\",\"operator\":\"leader\"}",
+                variable);
+            Assert.Contains("\"tf_transferHistory\":[", variable);
+            Assert.Contains("\"tf_transferTo\":\"lisi\"", variable);
+            Assert.Contains("\"tf_transferReason\":\"出差一周\"", variable);
+            Assert.Contains("\"tf_approvalComment\":\"leader 转办给 lisi（出差一周）\"", variable);
+            Assert.Contains("\"submitType\":7", variable);
+            Assert.DoesNotContain("\"time\":\"2026-08-01T", variable); // 禁本地 ISO 方言（契约 §2.4）
+            // 仓储读回（JSON 反序列化）后账本仍是数组，形状与内存仓同构
+            var reread = await _fx.Repo.FindTaskByIdAsync(taskId);
+            Assert.IsType<List<object?>>(reread!.Variables.GetObj(FlowConst.TransferHistory));
+            var hop = (Dictionary<string, object?>)((List<object?>)reread.Variables
+                .GetObj(FlowConst.TransferHistory)!)[0]!;
+            Assert.Equal(7L, Convert.ToInt64(hop["submitType"])); // JSON 回读整数为 long，值不变形
+            Assert.Equal("2026-08-01 09:00:00", hop["time"]);
+
+            // 待办在真库分页 SQL 上挪了
+            Assert.Contains(taskId.ToString(), await TodoIdsAsync(facade, "lisi"));
+            Assert.DoesNotContain(taskId.ToString(), await TodoIdsAsync(facade, "leader"));
+        }
+        finally
+        {
+            await _fx.CleanupByMarkerAsync("T1CS-transfer-trace");
+            _fx.RemoveDefine(defineId);
+        }
+    }
+
+    [Fact]
+    public async Task T1M7_TransferThenWithdraw_KeepsFromActorOutOfDoneListOverRealDb()
+    {
+        if (Skip) return; // SKIP_MYSQL=1
+        // 回归红线（Node 实测踩过）：转办若把被摘走的人写进 operator 列，该单一旦撤回
+        // （离开 DOING 但保留该列值），pageDoneTasks 的 state<>10 AND operator=? 会让他
+        // 凭空出现在「我已办」里。真库上把这条钉住。
+        var (defineId, iid, taskId, applyTaskId) = await SeedLeaderTaskAsync("transfer-redline");
+        try
+        {
+            var facade = new JeeflowFacade(_fx.Ctx);
+            Assert.Equal(0, (await facade.FlowAsync("processTask/transfer", new FlowData
+            {
+                [FlowConst.ProcessTaskIdKey] = taskId, ["fromActor"] = "leader",
+                ["toActor"] = "lisi", ["operator"] = "leader",
+            }))["code"]);
+            var wd = await facade.FlowAsync("processInstance/withdraw",
+                new FlowData { ["id"] = iid, ["operator"] = "applicant" });
+            Assert.True(Equals(0, wd["code"]), $"withdraw msg={wd["msg"]}");
+
+            // 任务离开 DOING（30），但 operator 列仍 NULL——没被转办覆写过
+            Assert.Equal((int)WfTaskState.Withdraw, await TaskStateOfAsync(taskId));
+            Assert.Null(await TaskColumnOfAsync(taskId, "operator"));
+            // 被摘走的人 / 接手但未办的人：这条都不该在他们的「我已办」里
+            Assert.DoesNotContain(taskId.ToString(), await DoneIdsAsync(facade, "leader"));
+            Assert.DoesNotContain(taskId.ToString(), await DoneIdsAsync(facade, "lisi"));
+            // 正向对照（防空断言）：真办过 apply 的 applicant 确实在自己「我已办」里看到它
+            Assert.Contains(applyTaskId.ToString(), await DoneIdsAsync(facade, "applicant"));
+        }
+        finally
+        {
+            await _fx.CleanupByMarkerAsync("T1CS-transfer-redline");
+            _fx.RemoveDefine(defineId);
+        }
+    }
+
+    [Fact]
+    public async Task T1M8_WithdrawRequiresOperatorAndOwnershipOverRealDb()
+    {
+        if (Skip) return; // SKIP_MYSQL=1
+        var (defineId, iid, taskId, _) = await SeedLeaderTaskAsync("withdraw-auth");
+        try
+        {
+            var facade = new JeeflowFacade(_fx.Ctx);
+            // 缺 operator：明确报错，严禁回落 user1 静默撤回；库里原样未动
+            var noOp = await facade.FlowAsync("processInstance/withdraw", new FlowData { ["id"] = iid });
+            Assert.Equal(99999999, noOp["code"]);
+            Assert.Equal("operator 必填", noOp["msg"]);
+            Assert.Equal((int)WfInstanceState.Doing,
+                Convert.ToInt32(await ScalarOfAsync("SELECT state FROM wf_process_instance WHERE id = @id", iid)));
+            Assert.Equal((int)WfTaskState.Doing, await TaskStateOfAsync(taskId));
+
+            // 无关第三人：拒绝且不落库
+            var third = await facade.FlowAsync("processInstance/withdraw",
+                new FlowData { ["id"] = iid, ["operator"] = "boss" });
+            Assert.Equal(99999999, third["code"]);
+            Assert.Equal("无权限撤回该流程实例", third["msg"]);
+            Assert.Equal((int)WfTaskState.Doing, await TaskStateOfAsync(taskId));
+
+            // 判据②：进行中任务的参与者撤回整单 → 任务 30 + update_user 回写真实撤回人
+            var ok = await facade.FlowAsync("processInstance/withdraw",
+                new FlowData { ["id"] = iid, ["operator"] = "leader" });
+            Assert.True(Equals(0, ok["code"]), $"withdraw msg={ok["msg"]}");
+            Assert.Equal((int)WfTaskState.Withdraw, await TaskStateOfAsync(taskId));
+            Assert.Equal("leader", await TaskColumnOfAsync(taskId, "update_user"));
+            Assert.Equal("leader",
+                await ScalarOfAsync("SELECT update_user FROM wf_process_instance WHERE id = @id", iid));
+        }
+        finally
+        {
+            await _fx.CleanupByMarkerAsync("T1CS-withdraw-auth");
+            _fx.RemoveDefine(defineId);
+        }
+    }
+
     [Fact]
     public async Task T1_TxRollbackLeavesNoHalfInstance()
     {

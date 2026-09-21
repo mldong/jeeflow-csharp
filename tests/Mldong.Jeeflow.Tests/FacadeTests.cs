@@ -6,7 +6,7 @@ using Mldong.Jeeflow.Facade;
 namespace Mldong.Jeeflow.Tests;
 
 /// <summary>
-/// Facade 45 action 契约测试：dispatch 全覆盖（无"未知 action"）、信封形状、
+/// Facade 40+ action 契约测试：dispatch 全覆盖（无"未知 action"）、信封形状、
 /// 出口纪律审计（C1/C2/C5/C7/C22 + CS1/CS2/CS4）、每 action 99999999 负向。
 /// </summary>
 public class FacadeTests : IDisposable
@@ -58,9 +58,9 @@ public class FacadeTests : IDisposable
         return inst.InstanceId.Value;
     }
 
-    /// <summary>45 action dispatch 全覆盖：任意载荷不落 default（否则 msg 含"未知 action"）。</summary>
+    /// <summary>40+ action dispatch 全覆盖（manifest 46 条）：任意载荷不落 default（否则 msg 含"未知 action"）。</summary>
     [Fact]
-    public async Task All45ActionsDispatch_NoUnknown()
+    public async Task AllActionsInManifest_Dispatch_NoUnknown()
     {
         var manifest = JsonDocument.Parse(
             File.ReadAllText(FindManifestPath())).RootElement;
@@ -80,7 +80,9 @@ public class FacadeTests : IDisposable
                 count++;
             }
         }
-        Assert.Equal(45, count);
+        // issues/115：processTask/transfer 补录后清单 45→46（本断言即 manifest ↔ 分派表一致性门禁：
+        // 清单漏记 → 该 action 不被 dispatch 覆盖；分派表漏记 → 落 unknown 分支直接红）
+        Assert.Equal(46, count);
     }
 
     private static string FindManifestPath()
@@ -516,6 +518,420 @@ public class FacadeTests : IDisposable
         foreach (var t in doing)
             Assert.Equal((int)WfTaskState.Withdraw, (await _repo.FindTaskByIdAsync(t.TaskId))!.TaskState);
         Assert.Empty(await _repo.FindDoingTasksAsync(iid, null));
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // issues/113~115 · 撤回鉴权 + 转办 processTask/transfer
+    // 断言一律落在**持久读回值**（_repo 读回 / facade 列表与 approvalRecord 出口），
+    // 不写"doing 列表为空"这类两码值都满足的弱断言。
+    // ═════════════════════════════════════════════════════════════════════
+
+    private async Task<Dictionary<string, object?>> TransferAsync(
+        long taskId, string fromActor, string toActor, string reason, string op) =>
+        await _facade.FlowAsync("processTask/transfer", new FlowData
+        {
+            [FlowConst.ProcessTaskIdKey] = taskId,
+            ["fromActor"] = fromActor,
+            ["toActor"] = toActor,
+            ["reason"] = reason,
+            ["operator"] = op,
+        });
+
+    private async Task<List<string>> TodoIdsOfAsync(string actor) =>
+        RowIdsOf(await _facade.FlowAsync("processTask/todoList", new FlowData { ["operator"] = actor }));
+
+    private async Task<List<string>> DoneIdsOfAsync(string actor) =>
+        RowIdsOf(await _facade.FlowAsync("processTask/doneList", new FlowData { ["operator"] = actor }));
+
+    private static List<string> RowIdsOf(Dictionary<string, object?> resp)
+    {
+        Assert.True(Equals(0, resp["code"]), $"列表接口 msg={resp["msg"]}");
+        var data = (Dictionary<string, object?>)resp["data"]!;
+        return ((List<object?>)data["rows"]!)
+            .Select(r => ((Dictionary<string, object?>)r!)["id"]!.ToString()!)
+            .ToList();
+    }
+
+    /// <summary>tf_transferHistory 读回（内存仓=List&lt;object?&gt;；MySQL 仓 JSON 回读同形）。</summary>
+    private static List<object?> HistoryOf(ProcessTask? t)
+    {
+        var history = t!.Variables.GetObj(FlowConst.TransferHistory) as List<object?>;
+        Assert.NotNull(history); // 账本必须是数组，不是单跳字符串/对象
+        return history!;
+    }
+
+    private static Dictionary<string, object?> HopAt(ProcessTask t, int index)
+    {
+        var history = HistoryOf(t);
+        Assert.True(index < history.Count, $"tf_transferHistory 只有 {history.Count} 条，取不到第 {index} 条");
+        return (Dictionary<string, object?>)history[index]!;
+    }
+
+    /// <summary>并行会签实例（05 flow）：applicant 办结 apply → userA/userB/userC 三条 DOING 会签任务。</summary>
+    private async Task<(long DefineId, long InstanceId)> SeedCountersignInstanceAsync()
+    {
+        var did = await TestInfra.SaveFlowDefineAsync(_repo, "fac-cs-transfer",
+            TestInfra.LoadFlow("05-countersign-parallel"));
+        var iid = await TestInfra.StartAndApplyAsync(_engine, _repo, did);
+        return (did, iid);
+    }
+
+    // ── 撤回（issues/114）──
+
+    [Fact]
+    public async Task Withdraw_NoOperator_Fails_NoSilentFallbackToUser1()
+    {
+        var iid = await SeedStartedInstanceAsync("WD-NOOP");
+        foreach (var args in new[]
+                 {
+                     new FlowData { ["id"] = iid },                       // 缺键
+                     new FlowData { ["id"] = iid, ["operator"] = "" },    // 空串
+                     new FlowData { ["id"] = iid, ["operator"] = "   " }, // 空白
+                 })
+        {
+            var resp = await _facade.FlowAsync("processInstance/withdraw", args);
+            Assert.Equal(99999999, resp["code"]);
+            Assert.Equal("operator 必填", resp["msg"]);
+        }
+        // 未被"以 user1 名义"静默撤回：读回实例/任务仍 10
+        Assert.Equal((int)WfInstanceState.Doing, (await _repo.FindInstanceByIdAsync(iid))!.State);
+        Assert.All(await _repo.FindDoingTasksAsync(iid, null),
+            t => Assert.Equal((int)WfTaskState.Doing, t.TaskState!));
+    }
+
+    [Fact]
+    public async Task Withdraw_ByInitiator_UpdateUserWrittenBackOnInstanceAndDoingTasks()
+    {
+        // 判据①：发起人撤回（发起人不是任何任务的参与者——各栈 IsAllowed 都不查这一支，必须显式补）
+        var iid = await SeedStartedInstanceAsync("WD-INIT");
+        var doing = await _repo.FindDoingTasksAsync(iid, null);
+        Assert.DoesNotContain("user1", doing.SelectMany(t => t.ActorIds));
+        var resp = await _facade.FlowAsync("processInstance/withdraw",
+            new FlowData { ["id"] = iid, ["operator"] = "user1" });
+        Assert.True(Equals(0, resp["code"]), $"withdraw msg={resp["msg"]}");
+        var inst = await _repo.FindInstanceByIdAsync(iid);
+        Assert.Equal((int)WfInstanceState.Withdraw, inst!.State);
+        Assert.Equal("user1", inst.UpdateUser);
+        foreach (var t in doing)
+        {
+            var after = await _repo.FindTaskByIdAsync(t.TaskId);
+            Assert.Equal((int)WfTaskState.Withdraw, after!.TaskState); // 30，不是 99
+            Assert.Equal("user1", after.UpdateUser);                   // 进行中任务 update_user 回写撤回人
+        }
+    }
+
+    [Fact]
+    public async Task Withdraw_ByDoingTaskParticipant_WholeInstanceAndFinishedRowUntouched()
+    {
+        // 判据②：进行中任务的参与者可撤回整单（作用于整单，不是只撤自己那一条），
+        // 且已完成(20) 行不得被撤回改写——update_user 必须还是当初的办理人 applicant
+        var (_, iid) = await SeedCountersignInstanceAsync();
+        var doing = await _repo.FindDoingTasksAsync(iid, null);
+        Assert.Equal(3, doing.Count);
+        var resp = await _facade.FlowAsync("processInstance/withdraw",
+            new FlowData { ["id"] = iid, ["operator"] = "userB" });
+        Assert.True(Equals(0, resp["code"]), $"withdraw msg={resp["msg"]}");
+        foreach (var t in doing)
+        {
+            var after = await _repo.FindTaskByIdAsync(t.TaskId);
+            Assert.Equal((int)WfTaskState.Withdraw, after!.TaskState);
+            Assert.Equal("userB", after.UpdateUser);
+        }
+        var inst = await _repo.FindInstanceByIdAsync(iid);
+        Assert.Equal((int)WfInstanceState.Withdraw, inst!.State);
+        Assert.Equal("userB", inst.UpdateUser);
+        var apply = (await _repo.FindHistoryTasksAsync(iid)).First(t => t.TaskName == "apply");
+        Assert.Equal((int)WfTaskState.Finished, apply.TaskState);
+        Assert.Equal("applicant", apply.UpdateUser);
+    }
+
+    [Fact]
+    public async Task Withdraw_UnrelatedThirdParty_DeniedAndNothingChanged()
+    {
+        var iid = await SeedStartedInstanceAsync("WD-3RD");
+        var resp = await _facade.FlowAsync("processInstance/withdraw",
+            new FlowData { ["id"] = iid, ["operator"] = "boss" });
+        Assert.Equal(99999999, resp["code"]);
+        Assert.Equal("无权限撤回该流程实例", resp["msg"]);
+        Assert.Equal((int)WfInstanceState.Doing, (await _repo.FindInstanceByIdAsync(iid))!.State);
+        Assert.Equal((int)WfTaskState.Doing, (await _repo.FindDoingTasksAsync(iid, null))[0].TaskState);
+    }
+
+    [Fact]
+    public async Task Withdraw_PrivilegedOperators_FlowAdminAndAutoAllowed()
+    {
+        // 判据③：flow.auto / flow.admin 沿用 isAllowed 既有放行约定（含大小写容错）
+        foreach (var op in new[] { "flow.admin", "flow.auto", "FLOW.ADMIN" })
+        {
+            var iid = await SeedStartedInstanceAsync("WD-PRIV");
+            var resp = await _facade.FlowAsync("processInstance/withdraw",
+                new FlowData { ["id"] = iid, ["operator"] = op });
+            Assert.True(Equals(0, resp["code"]), $"operator={op} withdraw msg={resp["msg"]}");
+            Assert.Equal((int)WfInstanceState.Withdraw, (await _repo.FindInstanceByIdAsync(iid))!.State);
+        }
+    }
+
+    // ── 转办（issues/115）──
+
+    [Fact]
+    public async Task Transfer_HappyPath_MovesTodoAndWritesThreeTraces()
+    {
+        var iid = await SeedStartedInstanceAsync("TF-HAPPY");
+        var taskId = (await TestInfra.FindDoingForAsync(_repo, iid, "leader")).TaskId!.Value;
+        Assert.Contains(taskId.ToString(), await TodoIdsOfAsync("leader"));
+
+        var resp = await TransferAsync(taskId, "leader", "lisi", "出差一周", "leader");
+        Assert.True(Equals(0, resp["code"]), $"transfer msg={resp["msg"]}");
+        Assert.True(resp.ContainsKey("data"));
+        Assert.Null(resp["data"]); // data → null
+
+        // 待办从 A 的列表挪到 B 的列表（读回列表接口）+ 同一 taskId 不新建任务
+        Assert.DoesNotContain(taskId.ToString(), await TodoIdsOfAsync("leader"));
+        Assert.Contains(taskId.ToString(), await TodoIdsOfAsync("lisi"));
+        Assert.Equal(new List<string> { "lisi" }, await _repo.FindTaskActorsAsync(taskId));
+        var after = await _repo.FindTaskByIdAsync(taskId);
+        Assert.Equal(taskId, after!.TaskId!.Value);
+        Assert.Equal((int)WfTaskState.Doing, after.TaskState); // 转办不办结
+
+        // 留痕①：任务变量 submitType=7 当前槽位（不走 execute）
+        Assert.Equal(7, after.Variables.GetInt(FlowConst.SubmitType));
+        // 留痕②：跨跳账本六键固定 camelCase，time 是 yyyy-MM-dd HH:mm:ss（非本地 ISO 方言）
+        var hop = HopAt(after, 0);
+        Assert.Equal(6, hop.Count);
+        Assert.Equal(7, Convert.ToInt64(hop["submitType"]));
+        Assert.Equal("leader", hop["fromActor"]);
+        Assert.Equal("lisi", hop["toActor"]);
+        Assert.Equal("出差一周", hop["reason"]);
+        Assert.Equal("2026-08-01 09:00:00", hop["time"]);
+        Assert.Equal("leader", hop["operator"]);
+        // 留痕②的另一半：单跳便捷键
+        Assert.Equal("lisi", after.Variables.GetStr(FlowConst.TransferTo));
+        Assert.Equal("出差一周", after.Variables.GetStr(FlowConst.TransferReason));
+        // 留痕③：末跳可读文案写进前端既有读取位
+        Assert.Equal("leader 转办给 lisi（出差一周）", after.Variables.GetStr(FlowConst.ApprovalComment));
+
+        // 回归红线：转办不得覆写任务 actor_id（本栈 ActorId → wf_process_task.operator 列）；
+        // "办理人记谁"由 update_user + tf_transferHistory[].operator 承载
+        Assert.Null(after.ActorId);
+        Assert.Equal("leader", after.UpdateUser);
+
+        // 出口 JSON 形状与契约样例逐字同形（approvalRecord 的 variable/ext 透出，issues/15 读取位）
+        var json = await _facade.FlowJsonAsync("processInstance/approvalRecord",
+            new FlowData { ["id"] = iid });
+        Assert.Contains(
+            "{\"submitType\":7,\"fromActor\":\"leader\",\"toActor\":\"lisi\"," +
+            "\"reason\":\"出差一周\",\"time\":\"2026-08-01 09:00:00\",\"operator\":\"leader\"}", json);
+    }
+
+    [Fact]
+    public async Task Transfer_MultiHopThenExecute_AppendOnlyLedgerSurvivesAndArgsWinMergeOrder()
+    {
+        var iid = await SeedStartedInstanceAsync("TF-MULTI");
+        var taskId = (await TestInfra.FindDoingForAsync(_repo, iid, "leader")).TaskId!.Value;
+        Assert.Equal(0, (await TransferAsync(taskId, "leader", "lisi", "", "leader"))["code"]);
+        // B 再转给 C：A→B 那条仍在（只追加不覆盖）
+        Assert.Equal(0, (await TransferAsync(taskId, "lisi", "wangwu", "交接", "lisi"))["code"]);
+        var mid = await _repo.FindTaskByIdAsync(taskId);
+        Assert.Equal(2, HistoryOf(mid).Count);
+        Assert.Equal("leader", HopAt(mid!, 0)["fromActor"]);
+        Assert.Equal("lisi", HopAt(mid, 0)["toActor"]);
+        Assert.Equal("", HopAt(mid, 0)["reason"]);            // 无值写 ""，不写 null
+        Assert.Equal("lisi", HopAt(mid, 1)["fromActor"]);
+        Assert.Equal("wangwu", HopAt(mid, 1)["toActor"]);
+        Assert.Equal("交接", HopAt(mid, 1)["reason"]);
+        // 单跳键与末跳文案只留末跳，全量以账本为准
+        Assert.Equal("wangwu", mid.Variables.GetStr(FlowConst.TransferTo));
+        Assert.Equal("lisi 转办给 wangwu（交接）", mid.Variables.GetStr(FlowConst.ApprovalComment));
+        Assert.Equal(new List<string> { "wangwu" }, await _repo.FindTaskActorsAsync(taskId));
+
+        // 变量合并序（spec 06 §transfer 5）：实例变量 ← 任务既有变量 ← 本次提交参数（args 最高）
+        var exec = await _facade.FlowAsync("processTask/execute", new FlowData
+        {
+            [FlowConst.ProcessTaskIdKey] = taskId,
+            ["operator"] = "wangwu",
+            [FlowConst.SubmitType] = (int)WfSubmitType.Agree,
+            [FlowConst.ApprovalComment] = "同意",
+        });
+        Assert.True(Equals(0, exec["code"]), $"接手人办理 msg={exec["msg"]}");
+        var done = await _repo.FindTaskByIdAsync(taskId);
+        // 本次提交参数压过任务既有变量：槽位回到 1（Go 上轮正是反的——7 会反噬 B 的 1/2/20）
+        Assert.Equal(1, done!.Variables.GetInt(FlowConst.SubmitType));
+        Assert.Equal("同意", done.Variables.GetStr(FlowConst.ApprovalComment));
+        // 任务变量未被整体替换：两跳转办留痕在 B 办结后仍在（跨跳账本的全部意义）
+        Assert.Equal(2, HistoryOf(done).Count);
+        Assert.Equal("wangwu", done.Variables.GetStr(FlowConst.TransferTo));
+        // 办结（非转办）路径照常写 operator 列——契约只禁转办覆写
+        Assert.Equal("wangwu", done.ActorId);
+    }
+
+    [Fact]
+    public async Task Transfer_ThenWithdrawFromInstance_FromActorDoneListNotPolluted()
+    {
+        // 回归红线（Node 实测踩过）：转办把被摘走的人写进 operator 列后，该单一旦撤回/终止
+        // （离开 DOING 但保留该列值），会凭空出现在他从没办过的「我已办」里。
+        var iid = await SeedStartedInstanceAsync("TF-REDLINE");
+        var task = await TestInfra.FindDoingForAsync(_repo, iid, "leader");
+        var taskId = task.TaskId!.Value;
+        Assert.Equal(0, (await TransferAsync(taskId, "leader", "lisi", "", "leader"))["code"]);
+        Assert.Null((await _repo.FindTaskByIdAsync(taskId))!.ActorId); // DOING 期间该列恒无值
+
+        var wd = await _facade.FlowAsync("processInstance/withdraw",
+            new FlowData { ["id"] = iid, ["operator"] = "user1" });
+        Assert.True(Equals(0, wd["code"]), $"withdraw msg={wd["msg"]}");
+        Assert.Equal((int)WfTaskState.Withdraw, (await _repo.FindTaskByIdAsync(taskId))!.TaskState);
+
+        // 被摘走的人：该单不得出现在其「我已办」
+        Assert.DoesNotContain(taskId.ToString(), await DoneIdsOfAsync("leader"));
+        // 接手但未办的人：同样不得出现
+        Assert.DoesNotContain(taskId.ToString(), await DoneIdsOfAsync("lisi"));
+        // 正向对照（防空断言）：真办过的发起人 apply 那条确实在其「我已办」里
+        var apply = (await _repo.FindHistoryTasksAsync(iid)).First(t => t.TaskName == "apply");
+        Assert.Contains(apply.TaskId!.Value.ToString(), await DoneIdsOfAsync("user1"));
+    }
+
+    [Fact]
+    public async Task Transfer_ThenWithdraw_FinishedRowKeepsOperatorAndTraceSurvives()
+    {
+        // 已完成(20) 行不被撤回改写 + 转办留痕在撤回后仍可读（撤回不抹账本）
+        var iid = await SeedStartedInstanceAsync("TF-FINISHED");
+        var taskId = (await TestInfra.FindDoingForAsync(_repo, iid, "leader")).TaskId!.Value;
+        Assert.Equal(0, (await TransferAsync(taskId, "leader", "lisi", "r", "leader"))["code"]);
+        var apply = (await _repo.FindHistoryTasksAsync(iid)).First(t => t.TaskName == "apply");
+        var resp = await _facade.FlowAsync("processInstance/withdraw",
+            new FlowData { ["id"] = iid, ["operator"] = "user1" });
+        Assert.Equal(0, resp["code"]);
+        var applyAfter = await _repo.FindTaskByIdAsync(apply.TaskId);
+        Assert.Equal((int)WfTaskState.Finished, applyAfter!.TaskState);
+        Assert.Equal("user1", applyAfter.ActorId); // 原办理人列不被撤回动过
+        // 撤回不抹账本：那条转办留痕读回仍在，且内容未变形
+        var ledger = HistoryOf(await _repo.FindTaskByIdAsync(taskId)!);
+        Assert.Single(ledger);
+        Assert.Equal("lisi", ((Dictionary<string, object?>)ledger[0]!)["toActor"]);
+    }
+
+    [Fact]
+    public async Task Transfer_NegativeCases_SixUnifiedMsgs()
+    {
+        var iid = await SeedStartedInstanceAsync("TF-NEG");
+        var taskId = (await TestInfra.FindDoingForAsync(_repo, iid, "leader")).TaskId!.Value;
+        // 先把 lisi 加签进来（供"目标人已是参与人"用例）
+        Assert.Equal(0, (await _facade.FlowAsync("processTask/surrogate", new FlowData
+        { [FlowConst.ProcessTaskIdKey] = taskId, ["actorIds"] = new List<object?> { "lisi" } }))["code"]);
+
+        var cases = new (string Name, FlowData Args, string Msg)[]
+        {
+            ("缺 operator", new FlowData
+                { [FlowConst.ProcessTaskIdKey] = taskId, ["fromActor"] = "leader", ["toActor"] = "wangwu" },
+                "operator 必填"),
+            ("operator 空串", new FlowData
+                { [FlowConst.ProcessTaskIdKey] = taskId, ["operator"] = "", ["fromActor"] = "leader",
+                  ["toActor"] = "wangwu" }, "operator 必填"),
+            ("缺 fromActor", new FlowData
+                { [FlowConst.ProcessTaskIdKey] = taskId, ["operator"] = "leader", ["toActor"] = "wangwu" },
+                "fromActor 必填"),
+            ("fromActor 空白", new FlowData
+                { [FlowConst.ProcessTaskIdKey] = taskId, ["operator"] = "leader", ["fromActor"] = " ",
+                  ["toActor"] = "wangwu" }, "fromActor 必填"),
+            ("缺 toActor", new FlowData
+                { [FlowConst.ProcessTaskIdKey] = taskId, ["operator"] = "leader", ["fromActor"] = "leader" },
+                "toActor 必填"),
+            ("操作人非 fromActor", new FlowData
+                { [FlowConst.ProcessTaskIdKey] = taskId, ["operator"] = "boss", ["fromActor"] = "leader",
+                  ["toActor"] = "wangwu" }, "无权限转办该任务"),
+            ("原办理人非参与人", new FlowData
+                { [FlowConst.ProcessTaskIdKey] = taskId, ["operator"] = "boss", ["fromActor"] = "boss",
+                  ["toActor"] = "wangwu" }, "原办理人不是该任务参与人"),
+            ("目标人已是参与人", new FlowData
+                { [FlowConst.ProcessTaskIdKey] = taskId, ["operator"] = "leader", ["fromActor"] = "leader",
+                  ["toActor"] = "lisi" }, "目标人已是该任务参与人"),
+        };
+        foreach (var (name, args, msg) in cases)
+        {
+            var resp = await _facade.FlowAsync("processTask/transfer", args);
+            Assert.True(Equals(99999999, resp["code"]), $"{name}：期望 99999999，实得 {resp["code"]}");
+            Assert.Equal(msg, resp["msg"]); // msg 跨栈逐字统一
+        }
+        // 负向不得留下半成品：参与者与留痕均未变
+        Assert.Contains("leader", await _repo.FindTaskActorsAsync(taskId));
+        Assert.Null((await _repo.FindTaskByIdAsync(taskId))!.Variables.GetObj(FlowConst.TransferHistory));
+
+        // 任务非进行中（办结后再转办）——最后一条独立用例，态已变
+        var finish = await _facade.FlowAsync("processTask/execute", new FlowData
+        {
+            [FlowConst.ProcessTaskIdKey] = taskId, ["operator"] = "leader",
+            [FlowConst.SubmitType] = (int)WfSubmitType.Agree,
+        });
+        Assert.True(Equals(0, finish["code"]), $"办结 msg={finish["msg"]}");
+        var late = await TransferAsync(taskId, "leader", "wangwu", "", "leader");
+        Assert.Equal(99999999, late["code"]);
+        Assert.Equal("任务非进行中，不可转办", late["msg"]);
+    }
+
+    [Fact]
+    public async Task Transfer_ByFlowAdmin_CanMoveOthersTodo()
+    {
+        // 归属判据例外：flow.admin/flow.auto 可代转（msg=无权限转办该任务 只在既非 fromActor 又非特权时出）
+        var iid = await SeedStartedInstanceAsync("TF-ADMIN");
+        var taskId = (await TestInfra.FindDoingForAsync(_repo, iid, "leader")).TaskId!.Value;
+        var resp = await TransferAsync(taskId, "leader", "lisi", "管理员改派", "flow.admin");
+        Assert.True(Equals(0, resp["code"]), $"transfer msg={resp["msg"]}");
+        Assert.Contains(taskId.ToString(), await TodoIdsOfAsync("lisi"));
+        var after = await _repo.FindTaskByIdAsync(taskId);
+        Assert.Equal("flow.admin", after!.UpdateUser);            // 操作人记 update_user
+        Assert.Equal("flow.admin", HopAt(after, 0)["operator"]); // 账本 operator 记真实操作人
+        Assert.Null(after.ActorId);
+    }
+
+    [Fact]
+    public async Task Surrogate_StillAppendOnly_AndTransferOnSharedTaskRemovesOnlyFromActor()
+    {
+        // 回归：加签（surrogate/addCandidate）仍"只追加不清空"，原参与人保留可办；
+        // 转办在同一任务上只摘 fromActor 一行，加签来的人不受影响
+        var iid = await SeedStartedInstanceAsync("TF-SURR");
+        var taskId = (await TestInfra.FindDoingForAsync(_repo, iid, "leader")).TaskId!.Value;
+        Assert.Equal(0, (await _facade.FlowAsync("processTask/surrogate", new FlowData
+        { [FlowConst.ProcessTaskIdKey] = taskId, ["actorIds"] = "helper1" }))["code"]);
+        Assert.Equal(0, (await _facade.FlowAsync("processTask/addCandidate", new FlowData
+        { [FlowConst.ProcessTaskIdKey] = taskId, ["actorIds"] = new List<object?> { "helper2" } }))["code"]);
+        Assert.Equal(new List<string> { "leader", "helper1", "helper2" },
+            await _repo.FindTaskActorsAsync(taskId));
+
+        Assert.Equal(0, (await TransferAsync(taskId, "leader", "lisi", "", "leader"))["code"]);
+        Assert.Equal(new List<string> { "helper1", "helper2", "lisi" },
+            await _repo.FindTaskActorsAsync(taskId));
+        // 加签来的人仍可办，被摘走的人待办已挪走
+        Assert.Contains(taskId.ToString(), await TodoIdsOfAsync("helper1"));
+        Assert.DoesNotContain(taskId.ToString(), await TodoIdsOfAsync("leader"));
+    }
+
+    [Fact]
+    public async Task Transfer_OnCountersignNode_OtherMembersVotingUnaffected()
+    {
+        // 会签节点转的是"自己那一票"：其余成员任务与簿记不受影响，接手人照常计入推进
+        var (_, iid) = await SeedCountersignInstanceAsync();
+        var taskA = await TestInfra.FindDoingForAsync(_repo, iid, "userA");
+        var taskB = await TestInfra.FindDoingForAsync(_repo, iid, "userB");
+        Assert.Equal(0, (await TransferAsync(taskA.TaskId!.Value, "userA", "lisi", "转岗", "userA"))["code"]);
+        Assert.Equal(new List<string> { "lisi" }, await _repo.FindTaskActorsAsync(taskA.TaskId.Value));
+        Assert.Equal(new List<string> { "userB" }, await _repo.FindTaskActorsAsync(taskB.TaskId!.Value));
+        Assert.Equal((int)WfTaskState.Doing, (await _repo.FindTaskByIdAsync(taskB.TaskId.Value))!.TaskState);
+
+        var exec = await _facade.FlowAsync("processTask/execute", new FlowData
+        {
+            [FlowConst.ProcessTaskIdKey] = taskA.TaskId.Value, ["operator"] = "lisi",
+            [FlowConst.SubmitType] = (int)WfSubmitType.Agree,
+        });
+        Assert.True(Equals(0, exec["code"]), $"接手人办理 msg={exec["msg"]}");
+        // 会签簿记：只完成 1/3 → 实例仍进行中，其余成员仍可办
+        Assert.Equal((int)WfInstanceState.Doing, (await _repo.FindInstanceByIdAsync(iid))!.State);
+        Assert.Contains(taskB.TaskId!.Value.ToString(), await TodoIdsOfAsync("userB"));
+        // 被摘走的 userA 不得再去办别人那一票
+        var stolen = await _facade.FlowAsync("processTask/execute", new FlowData
+        {
+            [FlowConst.ProcessTaskIdKey] = taskB.TaskId.Value, ["operator"] = "userA",
+            [FlowConst.SubmitType] = (int)WfSubmitType.Agree,
+        });
+        Assert.Equal(99999999, stolen["code"]);
     }
 }
 

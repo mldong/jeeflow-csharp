@@ -543,8 +543,8 @@ public class ComplianceTests
             var dict = registry.GetDict(key);
             Assert.NotEmpty(dict);
         }
-        // submitType 8 值全枚举（C24 字典与引擎枚举一致）
-        Assert.Equal(8, registry.GetDict("wf_process_submit_type").Count);
+        // submitType 9 值全枚举（C24 字典与引擎枚举一致；issues/115 补 7 转办）
+        Assert.Equal(9, registry.GetDict("wf_process_submit_type").Count);
         Assert.Empty(registry.GetDict("unknown"));
     }
 

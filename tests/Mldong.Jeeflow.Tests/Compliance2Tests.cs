@@ -4,7 +4,7 @@ using Mldong.Jeeflow.Core;
 namespace Mldong.Jeeflow.Tests;
 
 /// <summary>
-/// 合规场景 c23–c31（会签门控/08 全链/字段权限/resume 表单分配）+ submitType 8 值矩阵。
+/// 合规场景 c23–c31（会签门控/08 全链/字段权限/resume 表单分配）+ submitType 9 值矩阵。
 /// 门控变量注入：facade execute() 在 submitType=20 时注入 countersignDisagreeFlag=1（Java 口径），
 /// 引擎级测试直接在 args 携带（等价 facade 行为）。
 /// </summary>
@@ -210,10 +210,10 @@ public class Compliance2Tests
         _ = ctx;
     }
 
-    // ═══ submitType 8 值矩阵（引擎路径级；facade 分发语义在 M3 契约测试复核）═══
+    // ═══ submitType 9 值矩阵（引擎路径级；facade 分发语义在 M3 契约测试复核）═══
 
     [Fact]
-    public void SubmitTypeMatrix_FromCode8Values()
+    public void SubmitTypeMatrix_FromCode9Values()
     {
         Assert.Equal(WfSubmitType.Apply, (WfSubmitType)0);
         Assert.Equal(WfSubmitType.Agree, (WfSubmitType)1);
@@ -222,6 +222,7 @@ public class Compliance2Tests
         Assert.Equal(WfSubmitType.Jump, (WfSubmitType)4);
         Assert.Equal(WfSubmitType.ReApply, (WfSubmitType)5);
         Assert.Equal(WfSubmitType.RollbackToOperator, (WfSubmitType)6);
+        Assert.Equal(WfSubmitType.Transfer, (WfSubmitType)7);          // issues/115 转办留痕
         Assert.Equal(WfSubmitType.CountersignDisagree, (WfSubmitType)20);
         Assert.False(System.Enum.IsDefined(typeof(WfSubmitType), 99));
     }

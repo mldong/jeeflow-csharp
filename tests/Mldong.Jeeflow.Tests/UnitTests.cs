@@ -498,10 +498,15 @@ public class MetadataPermissionTests
     {
         var reg = new EnumDictRegistry();
         var submit = reg.GetDict("wf_process_submit_type");
-        Assert.Equal("20", submit[^1].Value);     // 8 值全枚举含 20 会签拒绝
-        Assert.Equal("拒绝申请", submit[^1].Label);
+        Assert.Equal(9, submit.Count);            // 9 值全枚举（issues/115 补 7 转办）
+        Assert.Equal("20", submit[^1].Value);     // spec 07：20=会签拒绝（曾与 2 同名"拒绝申请"，前端下拉分不开）
+        Assert.Equal("会签拒绝", submit[^1].Label);
         Assert.Equal("6", submit[6].Value);
         Assert.Equal("退回发起人", submit[6].Label);
+        Assert.Equal("7", submit[7].Value);
+        Assert.Equal("转办", submit[7].Label);
+        Assert.Equal("2", submit[2].Value);       // 2=拒绝申请保持不动，只把 20 改标签
+        Assert.Equal("拒绝申请", submit[2].Label);
         var instance = reg.GetDict("wf_process_instance_state");
         Assert.Equal(7, instance.Count);          // 10/20/30/40/45/50/99
         Assert.Equal("45", instance[4].Value);

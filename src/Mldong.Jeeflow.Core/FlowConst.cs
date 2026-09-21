@@ -28,6 +28,15 @@ public static class FlowConst
     public const string CcActors = "tf_ccActors";
     public const string CcActorsStart = "f_ccActors";
 
+    /// <summary>转办单跳便捷键：目标人（<c>processTask/transfer</c> 留痕，末跳值）。</summary>
+    public const string TransferTo = "tf_transferTo";
+    /// <summary>转办单跳便捷键：原因（无值为 <c>""</c>，不写 null）。</summary>
+    public const string TransferReason = "tf_transferReason";
+    /// <summary>转办跨跳追加式账本：每跳 append 一条
+    /// <c>{submitType,fromActor,toActor,reason,time,operator}</c>（只追加不覆盖，六键固定 camelCase，
+    /// time 一律 <c>yyyy-MM-dd HH:mm:ss</c>）。</summary>
+    public const string TransferHistory = "tf_transferHistory";
+
     public const string UserUserId = "u_userId";
     public const string UserRealName = "u_realName";
     public const string UserDeptId = "u_deptId";
@@ -81,7 +90,8 @@ public enum WfTaskState
     Abandon = 99,
 }
 
-/// <summary>提交类型（对齐 Java ProcessSubmitTypeEnum，8 值全枚举）。</summary>
+/// <summary>提交类型（对齐 Java ProcessSubmitTypeEnum，9 值全枚举）。
+/// 7 TRANSFER 仅供 <c>processTask/transfer</c> 写留痕，不走 <c>processTask/execute</c> 分发。</summary>
 public enum WfSubmitType
 {
     Apply = 0,
@@ -91,6 +101,8 @@ public enum WfSubmitType
     Jump = 4,
     ReApply = 5,
     RollbackToOperator = 6,
+    /// <summary>转办（摘原人 + 换新人）。</summary>
+    Transfer = 7,
     CountersignDisagree = 20,
 }
 

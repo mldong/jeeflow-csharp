@@ -3,7 +3,7 @@ using Mldong.Jeeflow.Persist;
 
 namespace Mldong.Jeeflow.Facade;
 
-/// <summary>45 action 实现：流程设计 / 委托代理 / bizData / 统计（对齐 Java JeeflowFacade）。</summary>
+/// <summary>40+ action 实现：流程设计 / 委托代理 / bizData / 统计（对齐 Java JeeflowFacade）。</summary>
 public partial class JeeflowFacade
 {
     // ═══ 流程设计（需扩展仓储）═══

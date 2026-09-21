@@ -79,8 +79,17 @@ public class ProcessTask
         UpdateUser = op;
     }
 
-    /// <summary>撤回任务（恢复到……状态机 C28：任务置 30 WITHDRAW）。</summary>
-    public void Withdraw() => TaskState = (int)WfTaskState.Withdraw;
+    /// <summary>
+    /// 撤回任务（状态机 C28：任务置 30 WITHDRAW，不是 99——99 保留给"废弃"语义）。
+    /// issues/114：<c>op</c> 是撤回人，须回写 <c>update_user</c>（审计链），不得保留建单人。
+    /// 不碰 <c>actor_id</c>：进行中任务该列恒无值是既有不变量（spec 06 §transfer 留痕①）。
+    /// </summary>
+    public void Withdraw(string? op = null, IClock? clock = null)
+    {
+        TaskState = (int)WfTaskState.Withdraw;
+        UpdateTime = (clock ?? SystemClock.Instance).Now;
+        UpdateUser = op;
+    }
 
     /// <summary>强行终止。</summary>
     public void Interrupt(string? op, IClock? clock = null)

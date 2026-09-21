@@ -2,14 +2,14 @@
   "_meta": {
     "version": "1.0",
     "created": "2026-09-06",
-    "purpose": "jeeflow C# 引擎（第 8 语言）M0 契约固化 —— 45 action 清单（Java 实查 ↔ 规范 ↔ MoonBit manifest ↔ C# 四方核对基准）",
+    "purpose": "jeeflow C# 引擎（第 8 语言）M0 契约固化 —— 46 action 清单（Java 实查 ↔ 规范 ↔ MoonBit manifest ↔ C# 四方核对基准）",
     "sources": {
       "java": "jeeflow-java/jeeflow-core/src/main/java/com/mldong/jeeflow/facade/JeeflowFacade.java flow() switch（L100-L155）",
       "spec": "jeeflow-doc/docs/spec/06-facade.md",
       "plan": "jeeflow-hub/docs/moonbit-engine-implementation-plan.md §0.1/§3.3/§4",
       "moon_manifest": "jeeflow-moon/docs/action-manifest.json（双 diff 基线，2026-09-05 与 Java diff 为空）"
     },
-    "count": 45,
+    "count": 46,
     "baseline": {
       "note": "spec 基线锚定（方案 §5 M0 通过条件）——每阶段收尾复核上游漂移",
       "java_head": "b7ef670 chore(release): v1.8.27",
@@ -22,11 +22,12 @@
       "version_line": "NuGet 独立 v1.0.0 起（O1）"
     },
     "verification": {
-      "java_vs_plan_section_0_1": "PASS — 45/45 无差集（processDefine 8 + processInstance 14 含 stats 3 + processSurrogate 5 + processTask 9）",
+      "java_vs_plan_section_0_1": "PASS — 45/45 无差集（processDefine 8 + processInstance 14 含 stats 3 + processSurrogate 5 + processTask 9）（基线快照，未含 issues/113~116 后新增）",
       "java_vs_php_manifest_40": "PASS — 差集恰为 5 个新 action（processSurrogate/update+detail ← issues/77；stats×3 ← issues/103），零反向差集",
       "checker": "scripts/check-action-manifest.mjs（本仓，M0 gate 复跑入口）",
       "java_vs_moon_manifest": "PASS — 45/45 无差集（2026-09-05 moon M0 产物，本次复用）",
-      "java_vs_csharp_impl": "PENDING — M3 facade 45 action 落地后复跑（c01-c45 action 清单核对）"
+      "java_vs_csharp_impl": "PENDING — M3 facade 45 action 落地后复跑（c01-c45 action 清单核对）",
+      "csharp_vs_java_after_113_116": "PASS — 46/46 无差集：Java 侧 issues/115 新增 processTask/transfer 后本清单同步补录（2026-09-21 逐 action 对照 jeeflow-java JeeflowFacade.flow() switch），processTask 组 9→10"
     },
     "shared_contracts": {
       "envelope": "恒 {code,msg,data}；成功 code=0 msg=成功；失败 code=99999999（只发明 99999999，不发明 9999xxxx）；未知 action → {code:99999999}",
@@ -133,8 +134,9 @@
           "action": "processInstance/withdraw",
           "method": "withdraw",
           "permission": "wf:processInstance:withdraw",
-          "req": "{id, operator?=user1}",
-          "resp": "实例 30 WITHDRAW + 任务 30（非 45，C28）级联持久化（v1.0.1）；不存在→流程实例不存在"
+          "note": "issues/113/114：operator 硬必填（严禁缺省回落 user1，否则撤回人被静默记成别人）；归属判据三条命中任一即放行（发起人 / 任一进行中任务参与者 / flow.auto+flow.admin），判据①不可复用 ProcessTask.IsAllowed（各栈都不查发起人）；只改写进行中任务（已完成 20/已终止 40 行不动），作用整单；实例与被撤任务 update_user 回写撤回人",
+          "req": "{id, operator 硬必填（不接受缺省）}",
+          "resp": "实例 30 WITHDRAW + 进行中任务 30（非 45，也不是 99，C28/issues/113）级联持久化（v1.0.1）；不存在→流程实例不存在；缺 operator→99999999 msg=operator 必填；无权限→99999999 msg=无权限撤回该流程实例"
         },
         {
           "action": "processInstance/bizData",
@@ -284,6 +286,14 @@
           "resp": "同 processTask/surrogate"
         },
         {
+          "action": "processTask/transfer",
+          "method": "taskTransfer",
+          "permission": "wf:processTask:transfer",
+          "note": "issues/115 转办（摘原人 + 换新人），区别于 surrogate 的只追加：待办从 A 挪到 B、同一 processTaskId 不新建任务；参与者判据以 wf_process_task_actor 表为准；三件留痕写任务变量（submitType=7 当前槽位 + tf_transferHistory 追加式跨跳账本 + tf_transferTo/tf_transferReason 单跳键 + tf_approvalComment 末跳可读文案）；注意：严禁覆写任务 actor_id/operator 列（进行中任务该列恒无值是既有不变量，pageDoneTasks 按 state<>10 AND t.operator=? 过滤，覆写会让被摘走的人凭空出现在「我已办」），办理人记 update_user + tf_transferHistory[].operator；msg 跨栈逐字统一",
+          "req": "{processTaskId, fromActor, toActor, reason?, operator 硬必填（不接受缺省）}",
+          "resp": "ok；data=null；失败 99999999 + msg：operator 必填 / fromActor 必填 / toActor 必填 / 无权限转办该任务 / 原办理人不是该任务参与人 / 目标人已是该任务参与人 / 任务非进行中，不可转办"
+        },
+        {
           "action": "processTask/latest",
           "method": "taskLatest",
           "permission": null,
@@ -414,11 +424,11 @@
     }
   },
   "summary": {
-    "total": 45,
+    "total": 46,
     "byGroup": {
       "processDefine": 8,
       "processInstance": 14,
-      "processTask": 9,
+      "processTask": 10,
       "processDesign": 9,
       "processSurrogate": 5
     },

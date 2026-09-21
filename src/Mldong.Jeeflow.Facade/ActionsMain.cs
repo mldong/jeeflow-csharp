@@ -2,7 +2,7 @@ using Mldong.Jeeflow.Core;
 
 namespace Mldong.Jeeflow.Facade;
 
-/// <summary>45 action 实现：定义/实例/任务/视图端点（对齐 Java JeeflowFacade 私有方法）。</summary>
+/// <summary>40+ action 实现：定义/实例/任务/视图端点（对齐 Java JeeflowFacade 私有方法）。</summary>
 public partial class JeeflowFacade
 {
     // ═══ 流程定义 ═══
@@ -171,12 +171,40 @@ public partial class JeeflowFacade
     private async Task<Dictionary<string, object?>> WithdrawAsync(FlowData args)
     {
         var instanceId = ToLong(args.GetObj("id"));
-        var op = ToStr(args.GetObj("operator"), "user1");
+        // issues/114：operator 硬必填——严禁缺省回落 user1 等固定账号。回落会把撤回人静默记成
+        // 别人（实例与任务的 update_user 一起失真），审计链坏掉且不报错。msg 跨栈统一「operator 必填」。
+        var op = ToStr(args.GetObj("operator"))?.Trim();
+        if (string.IsNullOrEmpty(op)) return Error("operator 必填");
         var inst = await _repository.FindInstanceByIdAsync(instanceId);
         if (inst == null) return Error("流程实例不存在");
+        if (!await CanWithdrawAsync(inst, op!)) return Error("无权限撤回该流程实例");
         inst.Withdraw(op);
         await _repository.UpdateInstanceAsync(inst); // v1.0.1：级联持久化任务状态
         return Ok();
+    }
+
+    /// <summary>
+    /// 撤回归属判据（issues/114，命中任一即放行，全不命中拒绝）：
+    /// <list type="number">
+    /// <item><c>operator</c> = 实例发起人（<c>wf_process_instance.operator</c>）——
+    /// <b>不可复用 <see cref="ProcessTask.IsAllowed"/></b>：各语言引擎的 isAllowed 只判
+    /// "operator 在不在该任务 actorIds"+ auto/admin 放行，从不查实例发起人，这一支必须显式补；</item>
+    /// <item><c>operator</c> 是该实例任一<b>进行中</b>任务的参与者
+    /// （<c>wf_process_task_actor.actor_id</c>，以参与者表为准，不用聚合副本——副本可能滞后于
+    /// 加签/转办的增量写入）；</item>
+    /// <item><c>operator</c> ∈ {flow.auto, flow.admin}（沿用 isAllowed 既有放行约定）。</item>
+    /// </list>
+    /// </summary>
+    private async Task<bool> CanWithdrawAsync(ProcessInstance inst, string op)
+    {
+        if (IsPrivilegedOperator(op)) return true;
+        if (op == inst.Operator) return true;
+        var doingTasks = await _repository.FindDoingTasksAsync(inst.InstanceId!.Value, new string[] { });
+        foreach (var task in doingTasks)
+        {
+            if ((await _repository.FindTaskActorsAsync(task.TaskId!.Value)).Contains(op)) return true;
+        }
+        return false;
     }
 
     // ═══ 流程任务 ═══
@@ -720,6 +748,128 @@ public partial class JeeflowFacade
         // C15/issues/28：addTaskActor=去重追加非全删全插
         await _repository.AddTaskActorAsync(taskId!.Value, actors);
         return Ok();
+    }
+
+    /// <summary>
+    /// 转办（issues/115）：摘原办理人 + 换新参与人，区别于 <c>processTask/surrogate</c> 加签的
+    /// "只追加"（加签后原人保留可办，本 action 把待办从 A 挪到 B）。契约七条语义（spec 06
+    /// §processTask/transfer）逐条落地：
+    /// <list type="number">
+    /// <item><b>摘原人</b>：只删 <c>fromActor</c> 在该任务的 <c>wf_process_task_actor</c> 行，
+    /// 会签节点转的是"自己那一票"，其余成员不受影响；</item>
+    /// <item><b>加新人</b>：<c>toActor</c> 追加为该任务参与人，办理规则不变；</item>
+    /// <item><b>任务不新建</b>：沿用同一 <c>processTaskId</c>，高亮图/节点进度不变；</item>
+    /// <item><b>留痕三件</b>：任务变量 <c>submitType=7</c>（当前槽位，B 办结前审批历史直接读作"转办"，
+    /// 办结后由 B 的 1/2/20 覆盖，属预期）+ 跨跳追加账本 <c>tf_transferHistory</c>（每跳 append，
+    /// 六键 camelCase，time 一律 <c>yyyy-MM-dd HH:mm:ss</c>）+ 单跳便捷键 <c>tf_transferTo</c>/
+    /// <c>tf_transferReason</c> + 末跳可读文案 <c>tf_approvalComment</c>；</item>
+    /// <item><b>变量合并序</b>（留痕存活的前置条件）：办理提交走"实例变量 ← 任务既有变量 ← 本次提交
+    /// 参数"，见 <see cref="ProcessTask.Finish"/>（args 覆盖式合并，不整体替换任务变量）；</item>
+    /// <item><b>去重</b>：<c>toActor</c> 已是参与者 / <c>fromActor</c> 不在参与者里 → 明确报错；</item>
+    /// <item><b>前置态</b>：任务非进行中（<c>taskState != 10</c>）→ 明确报错。</item>
+    /// </list>
+    /// <b>注意：严禁覆写任务 <c>actor_id</c>（本栈 <see cref="ProcessTask.ActorId"/> → <c>operator</c> 列）</b>：
+    /// 进行中任务该列恒无值是既有不变量，而 <c>PageDoneTasks</c> 按 <c>task_state&lt;&gt;10 AND
+    /// t.operator=?</c> 过滤——把被摘走的人写进这一列，该单一旦撤回/终止（离开 DOING 但保留该列值），
+    /// 会凭空出现在他从没办过的「我已办」列表里（Node 实测踩到，spec 06 §transfer 留痕①）。
+    /// "办理人记谁"由 <c>update_user</c> = 转办操作人 + <c>tf_transferHistory[].operator</c> 承载。
+    /// </summary>
+    private async Task<Dictionary<string, object?>> TaskTransferAsync(FlowData args)
+    {
+        var taskId = ToLong(args.GetObj(FlowConst.ProcessTaskIdKey));
+        // 参数必填序与 msg 逐字对齐 spec 06「失败 msg 跨栈统一文案」（失败码一律 99999999）
+        var op = ToStr(args.GetObj("operator"))?.Trim();
+        if (string.IsNullOrEmpty(op)) return Error("operator 必填");
+        var fromActor = ToStr(args.GetObj("fromActor"))?.Trim();
+        if (string.IsNullOrEmpty(fromActor)) return Error("fromActor 必填");
+        var toActor = ToStr(args.GetObj("toActor"))?.Trim();
+        if (string.IsNullOrEmpty(toActor)) return Error("toActor 必填");
+        var reason = ToStr(args.GetObj("reason")) ?? "";
+        var task = taskId == null ? null : await _repository.FindTaskByIdAsync(taskId.Value);
+        if (task == null) return Error("任务不存在");
+        // 归属判据：只能转自己那一条待办（flow.auto / flow.admin 例外），与撤回同口径
+        if (!IsPrivilegedOperator(op!) && op != fromActor) return Error("无权限转办该任务");
+        // 前置态：仅进行中（DOING=10）任务可转办
+        if (!task.IsDoing()) return Error("任务非进行中，不可转办");
+        // 参与者以关系表为判据（聚合副本可能滞后于加签/转办的增量写入）；副本并入仅作仓储不水合时兜底
+        var actors = await _repository.FindTaskActorsAsync(taskId!.Value);
+        var participants = DedupKeepOrder(actors.Concat(task.ActorIds));
+        if (!participants.Contains(fromActor!)) return Error("原办理人不是该任务参与人");
+        if (participants.Contains(toActor!)) return Error("目标人已是该任务参与人");
+        // ① 摘原人（仅 fromActor 一行）+ ② 加新人（同一 taskId，不新建任务）
+        await _repository.RemoveTaskActorAsync(taskId.Value, new List<string> { fromActor! });
+        await _repository.AddTaskActorAsync(taskId.Value, new List<string> { toActor! });
+        // ④ 留痕三件（写进任务变量，与办理提交同一槽位）
+        var vars = task.Variables ?? new FlowData();
+        var now = Clock.Now;
+        // 账本为何必须是追加式列表而非单跳键：本栈审批记录的槽位就是任务行本身，B 办结时
+        // submitType 会被 B 的办理参数覆盖；没有追加式账本，多跳转办只剩末跳、办结后转办事实整体消失。
+        // 新建容器而非原地 Add：内存仓浅拷贝下变量值在副本与存储间共享引用，原地改会串台。
+        vars[FlowConst.TransferHistory] = AppendTransferRecord(
+            vars.GetObj(FlowConst.TransferHistory),
+            new Dictionary<string, object?>
+            {
+                // 六键固定 camelCase + 固定键序（与契约/其他栈 JSON 同形；Dictionary 无删除时按插入序枚举）
+                [FlowConst.SubmitType] = (int)WfSubmitType.Transfer,
+                ["fromActor"] = fromActor,
+                ["toActor"] = toActor,
+                ["reason"] = reason,          // 无值写 ""，不写 null
+                ["time"] = FmtTime(now)!,     // 一律 yyyy-MM-dd HH:mm:ss，不得用本地 ISO 方言
+                ["operator"] = op,
+            });
+        vars[FlowConst.SubmitType] = (int)WfSubmitType.Transfer; // 当前槽位（B 办结后由其覆盖，预期）
+        vars[FlowConst.TransferTo] = toActor;
+        vars[FlowConst.TransferReason] = reason;
+        vars[FlowConst.ApprovalComment] = TransferComment(fromActor!, toActor!, reason); // 末跳可读文案
+        task.Variables = vars;
+        task.UpdateTime = now;
+        task.UpdateUser = op; // "办理人记谁"落这列（actor_id 不碰）
+        // 仓储 updateTask 会用任务副本的 actorIds 全量覆写参与者行（内存/JDBC 同语义），
+        // 必须同步为摘/加之后的最新集合，否则留痕落库时把旧参与者原样写回
+        task.ActorIds = DedupKeepOrder(
+            participants.Where(a => a != fromActor).Append(toActor!));
+        await _repository.UpdateTaskAsync(task);
+        return Ok();
+    }
+
+    /// <summary>tf_transferHistory 追加（只追加不覆盖，spec 06 §transfer 留痕②）。
+    /// 既有值三种来源都容错：本栈内存写入的 <c>List&lt;object?&gt;</c>、直接构造的
+    /// <c>List&lt;Dictionary&lt;string,object?&gt;&gt;</c>、MySQL 仓 variable 列 JSON 回读的
+    /// <c>List&lt;object?&gt;</c>（元素为 Dictionary）。统一归一为 <c>List&lt;object?&gt;</c>
+    /// ——与 JSON 落地形态同构，便于八栈读到同一形状。</summary>
+    private static List<object?> AppendTransferRecord(object? existing, Dictionary<string, object?> record)
+    {
+        var outList = new List<object?>();
+        if (existing is System.Collections.IEnumerable en and not string)
+        {
+            foreach (var item in en) outList.Add(item);
+        }
+        outList.Add(record);
+        return outList;
+    }
+
+    /// <summary>转办末跳可读文案（tf_approvalComment 槽位，前端审批意见既有读取位 issues/15）：
+    /// 形如「A 转办给 B（原因…）」，无原因时「A 转办给 B」。label 与
+    /// <c>wf_process_submit_type</c> 的 7 同词。</summary>
+    private static string TransferComment(string fromActor, string toActor, string reason)
+    {
+        var r = reason.Trim();
+        return r.Length == 0
+            ? $"{fromActor} 转办给 {toActor}"
+            : $"{fromActor} 转办给 {toActor}（{r}）";
+    }
+
+    /// <summary>去重保序（空串剔除）。</summary>
+    private static List<string> DedupKeepOrder(IEnumerable<string> items)
+    {
+        var seen = new HashSet<string>();
+        var list = new List<string>();
+        foreach (var item in items)
+        {
+            if (string.IsNullOrEmpty(item)) continue;
+            if (seen.Add(item)) list.Add(item);
+        }
+        return list;
     }
 
     private async Task<Dictionary<string, object?>> TaskLatestAsync(FlowData args)

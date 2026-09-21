@@ -19,6 +19,7 @@
 | 3 | 退回上一步 | `ExecuteAndJumpTaskAsync(null)` |
 | 4 | 跳转 | `ExecuteAndJumpTaskAsync(taskName)` |
 | 6 | 退回发起人 | `ExecuteAndJumpToFirstTaskNodeAsync` |
+| 7 | 转办（**不走 execute 分发**，`processTask/transfer` 写留痕用） | `RemoveTaskActorAsync(fromActor)` + `AddTaskActorAsync(toActor)` |
 | 20 | 会签拒绝 | `ExecuteProcessTaskAsync` + `countersignDisagreeFlag=1` |
 
 ## 聚合根（DDD 充血模型）
