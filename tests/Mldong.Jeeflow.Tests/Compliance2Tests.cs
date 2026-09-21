@@ -262,6 +262,35 @@ public class Compliance2Tests
     }
 
     [Fact]
+    public async Task SubmitType3_ThreeNoLineageShapes_AllGive20010007()
+    {
+        // issues/121 P2：引擎侧「无血缘」实为三种数据形状，都得报 20010007、都不得静默不建单——
+        // P1 之前落的老行该列是 0 或 NULL，跨库迁来的还可能指不到真实行。
+        var (engine, repo) = TestInfra.NewEngine();
+        var did = await TestInfra.SaveFlowDefineAsync(repo, "ln3", TestInfra.LoadFlow("02-multi-task"));
+        foreach (var shape in new[] { "zero", "null", "dangling" })
+        {
+            var inst = await engine.StartProcessInstanceByIdAsync(did, "applicant", new FlowData());
+            var apply = (await repo.FindDoingTasksAsync(inst.InstanceId!.Value, null))
+                .First(t => t.TaskName == "apply");
+            var row = (await repo.FindTaskByIdAsync(apply.TaskId!.Value))!;
+            row.ParentTaskId = shape switch
+            {
+                "zero" => 0,
+                "null" => null,
+                _ => long.MaxValue,
+            };
+            await repo.UpdateTaskAsync(row);
+            var who = row.ActorIds.FirstOrDefault() ?? "applicant";
+            var ex = await Assert.ThrowsAsync<JeeflowException>(() =>
+                engine.ExecuteAndJumpTaskAsync(row.TaskId!.Value, who, new FlowData(), null));
+            Assert.Contains("20010007", ex.Message);
+            Assert.True((await repo.FindDoingTasksAsync(inst.InstanceId!.Value, null)).Count <= 1,
+                $"形状 {shape}：报错即不建单，不该凭空多出进行中任务");
+        }
+    }
+
+    [Fact]
     public async Task SubmitType4_JumpToNamedTaskNode()
     {
         // JUMP task1 → 跳转目标节点新待办；首任务节点强制 assignee=发起人（C28）
