@@ -389,7 +389,12 @@ public partial class JeeflowFacade
         s.Surrogate = ToStr(args.GetObj("surrogate"));
         s.StartTime = ParseTime(args.GetObj("startTime"));
         s.EndTime = ParseTime(args.GetObj("endTime"));
-        s.Enabled = ToInt(args.GetObj("enabled"), 1); // C26：enabled=0 不得折叠成 1
+        // issues/116 判据④（05-spi）：enabled **只有 1 生效**，脏值（解析不出整数的值）**不得当启用**
+        // → 回落 0（停用），对齐 Java `enabledArg == null ? 1 : toInt(enabledArg, 0)` 与 PHP `(int)'abc'`→0；
+        // 原先 `ToInt(enabled, 1)` 让脏值静默变启用，与 PHP 方向相反（跨栈双仓同答案门禁红点）。
+        // 缺键/显式 null 仍是契约默认 1（06 §4.5 save/update 参数表「enabled 默认 1」），不改台账语义。
+        var enabledArg = args.GetObj("enabled");
+        s.Enabled = enabledArg == null ? 1 : ToInt(enabledArg, 0);
         s.UpdateUser = op;
     }
 

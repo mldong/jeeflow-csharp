@@ -380,6 +380,7 @@
     "processSurrogate": {
       "label": "委托代理",
       "requiresExtRepository": true,
+      "runtime": "引擎内置「委托自动生效」（issues/116）：任务参与者解析完成后、落库前逐个参与者查 getSurrogate，命中的代理人并入参与者集合本身随任务落 wf_process_task_actor（授权人保留，任一可办；不级联、串行会签只进当一步任务、多条命中取 id 最大）。默认开启，关闭：ServiceContext.SurrogateAutoApply=false 或 SurrogateApplier=NullSurrogateApplier.Instance；未配置扩展仓储时静默跳过不打断建单。五 action 仍为台账 CRUD。",
       "actions": [
         {
           "action": "processSurrogate/page",
@@ -392,8 +393,8 @@
           "action": "processSurrogate/save",
           "method": "surrogateSave",
           "permission": "wf:processSurrogate:save",
-          "note": "时间窗空格与 ISO T 双格式解析（C26）；enabled=0 不得折叠成 1",
-          "req": "{id?,processName,operator?(显式传入才覆盖),surrogate,startTime,endTime,enabled?默认1}",
+          "note": "时间窗空格与 ISO T 双格式解析（C26）；enabled=0 不得折叠成 1；判据④（05-spi/issues/116）：只有 1 生效，传了但解析不出整数的脏值按停用(0)落库，缺键才是契约默认 1",
+          "req": "{id?,processName,operator?(显式传入才覆盖),surrogate,startTime,endTime,enabled?缺键默认1、脏值按0}",
           "resp": "新建 create=operator；出 {id}"
         },
         {

@@ -37,6 +37,25 @@ public sealed class ServiceContext
     /// <summary>业务数据读取器（bizData action，按名 "metaTableReader" 查找，issues/23/28）。</summary>
     public object? BizDataReader { get; set; }
 
+    /// <summary>
+    /// 委托代理自动生效开关（issues/116 批次 D，契约 06 §4.5 条款 3）——<b>引擎内置、默认开启</b>。
+    /// <para><b>关闭 API（.NET options 开关，主路径）</b>：<c>ctx.SurrogateAutoApply = false;</c></para>
+    /// <para>等价第二路径（null-object 注册）：<c>ctx.SurrogateApplier = NullSurrogateApplier.Instance;</c></para>
+    /// 关闭后回到「仅台账」行为：<c>processSurrogate/*</c> 五 action 照存照查，建任务不再应用委托。
+    /// </summary>
+    public bool SurrogateAutoApply { get; set; } = true;
+
+    /// <summary>
+    /// 委托应用扩展点（issues/116）；null = 内置 <see cref="ExtRepositorySurrogateApplier"/>
+    /// （逐个参与者查 <see cref="IProcessExtRepository.GetSurrogateAsync"/>）。
+    /// 注册 <see cref="NullSurrogateApplier"/> 或自定义实现即可覆盖默认行为。
+    /// </summary>
+    public ISurrogateApplier? SurrogateApplier { get; set; }
+
+    /// <summary>解析委托应用器：未注册即用内置默认（首次解析后缓存）。</summary>
+    public ISurrogateApplier SurrogateApplierOrDefault =>
+        SurrogateApplier ??= new ExtRepositorySurrogateApplier(this);
+
     /// <summary>assignmentHandler 按名注册表（键=Java FQCN，注册名=Java 口径，方案 §3.1）。</summary>
     public Dictionary<string, IAssignmentHandler> AssignmentHandlers { get; } = new();
 

@@ -445,6 +445,169 @@ public class MySqlBehaviorSuite : RepositoryBehaviorSuite
         _fx.RemoveDefine(defineId);
         Assert.Null(await _fx.Repo.FindDefineByIdAsync(defineId));
     }
+
+    // ═══ issues/116 批次 D：委托代理自动生效（SQL 仓 + 双仓一致，契约 06 §4.5 条款 6）═══
+
+    /// <summary>
+    /// SQL 仓真库用例：断言落在 <c>wf_process_task_actor</c> 真行，并把同一份委托数据
+    /// 同时喂给内存仓，逐判据比对两仓结论（条款 6：同栈两仓给出不同结论即缺陷）。
+    /// </summary>
+    [Fact]
+    public async Task T1_SurrogateAutoApply_RealActorRows_AndDualRepoSameAnswer()
+    {
+        if (Skip) return; // SKIP_MYSQL=1
+        const string flowName = "T1CS-surrogate";
+        const string actor = "t1sur-actor";
+        var defineId = await SaveSurrogateDefineAsync(flowName, actor);
+        try
+        {
+            // ── 正向 + 条款 1.4（多条命中取 max id，SQL 侧 ORDER BY id DESC）──
+            await SeedSurrogateAsync(actor, "t1sur-agentOld", flowName, 1);
+            await SeedSurrogateAsync(actor, "t1sur-agentNew", flowName, 1);
+            var taskId = await StartUntilApprovalAsync(defineId);
+            var rows = await _fx.Repo.FindTaskActorsAsync(taskId);
+            Assert.Equal(new List<string> { actor, "t1sur-agentNew" }, rows);
+
+            // ── 判据①：空 processName = 全部流程兜底（精确名未命中时）──
+            await ClearSurrogateRowsAsync();
+            await SeedSurrogateAsync(actor, "t1sur-wild", "", 1);
+            Assert.Equal(new List<string> { actor, "t1sur-wild" },
+                await _fx.Repo.FindTaskActorsAsync(await StartUntilApprovalAsync(defineId)));
+
+            // ── 判据②：时间窗（NULL=该侧不限；窗外不生效）──
+            foreach (var (start, end, expectHit) in new (DateTime?, DateTime?, bool)[]
+                     {
+                         (null, null, true),
+                         (new DateTime(2020, 1, 1), null, true),
+                         (null, new DateTime(2030, 1, 1), true),
+                         (new DateTime(2030, 1, 1), null, false),
+                         (null, new DateTime(2020, 1, 1), false),
+                     })
+            {
+                await ClearSurrogateRowsAsync();
+                await SeedSurrogateAsync(actor, "t1sur-win", flowName, 1, start, end);
+                var got = await _fx.Repo.FindTaskActorsAsync(await StartUntilApprovalAsync(defineId));
+                Assert.Equal(expectHit ? 2 : 1, got.Count);
+            }
+
+            // ── 判据③：自委托过滤 / 判据④：enabled 只认 1 ──
+            await ClearSurrogateRowsAsync();
+            await SeedSurrogateAsync(actor, actor, flowName, 1);
+            Assert.Single(await _fx.Repo.FindTaskActorsAsync(await StartUntilApprovalAsync(defineId)));
+            await ClearSurrogateRowsAsync();
+            await SeedSurrogateAsync(actor, "t1sur-off", flowName, 0);
+            Assert.Single(await _fx.Repo.FindTaskActorsAsync(await StartUntilApprovalAsync(defineId)));
+
+            // ── 条款 6：同数据喂内存仓，逐判据同答案 ──
+            await VerifySameAnswerAsMemoryRepoAsync(actor, flowName);
+        }
+        finally
+        {
+            await ClearSurrogateRowsAsync();
+            await _fx.CleanupByMarkerAsync("surrogate");
+            _fx.RemoveDefine(defineId);
+        }
+    }
+
+    /// <summary>同 SQL 侧用的委托数据在内存仓上重放，两仓 <c>getSurrogate</c> 结论逐一比对。</summary>
+    private async Task VerifySameAnswerAsMemoryRepoAsync(string actor, string flowName)
+    {
+        var probe = new DateTime(2026, 8, 1, 9, 0, 0); // 与夹具 FixedClock 同刻
+
+        var cases = new (string Op, string Agent, string? ProcessName, int Enabled,
+            DateTime? Start, DateTime? End)[]
+        {
+            (actor, "mem-A", flowName, 1, null, null),          // 精确命中
+            (actor, "mem-B", "", 1, null, null),                // 全流程兜底
+            (actor, "mem-C", flowName, 0, null, null),          // 停用
+            (actor, actor, flowName, 1, null, null),            // 自委托
+            (actor, "mem-D", flowName, 1, new DateTime(2030, 1, 1), null), // 未到期
+        };
+        foreach (var c in cases)
+        {
+            await ClearSurrogateRowsAsync();
+            // 每判据一个干净的内存仓（与 SQL 侧「同样本只一条台账」严格对齐）
+            var memRepo = new MemoryRepository();
+            var memCtx = TestInfra.NewContext(memRepo);
+            memRepo.Configure(memCtx);
+            var memExt = new MemoryExtRepository(memRepo, memCtx);
+            // 同一份数据分别写进两仓，逐判据比对读侧结论
+            await memExt.SaveSurrogateAsync(new ProcessSurrogate
+            {
+                ProcessName = c.ProcessName, Operator = c.Op, Surrogate = c.Agent,
+                Enabled = c.Enabled, StartTime = c.Start, EndTime = c.End, CreateUser = "T1CS-SUR",
+            });
+            await _fx.ExtRepo.SaveSurrogateAsync(new ProcessSurrogate
+            {
+                ProcessName = c.ProcessName, Operator = c.Op, Surrogate = c.Agent,
+                Enabled = c.Enabled, StartTime = c.Start, EndTime = c.End,
+                CreateTime = probe, CreateUser = "T1CS-SUR", UpdateTime = probe, UpdateUser = "T1CS-SUR",
+            });
+            var fromSql = await _fx.ExtRepo.GetSurrogateAsync(c.Op, c.ProcessName, probe);
+            var fromMem = await memExt.GetSurrogateAsync(c.Op, c.ProcessName, probe);
+            Assert.Equal(fromMem?.Surrogate, fromSql?.Surrogate); // 同栈两仓同答案
+        }
+        await ClearSurrogateRowsAsync();
+    }
+
+    /// <summary>01-simple 打补丁：define.name = content.name = flowName、审批节点参与者换成专属 actor（不干扰他组用例）。</summary>
+    private async Task<long> SaveSurrogateDefineAsync(string flowName, string actor)
+    {
+        var json = TestInfra.LoadFlow("01-simple")
+            .Replace("\"name\": \"simple\"", $"\"name\": \"{flowName}\"")
+            .Replace("\"assignee\": \"leader\"", $"\"assignee\": \"{actor}\"");
+        var define = new ProcessDefine
+        {
+            Id = 919977,          // T1 专属段内的固定号（避开 SaveT1DefineAsync 的自增序列）
+            Name = flowName,          // 条款 1.1 不变量：define.name == content.name
+            DisplayName = "T1-委托自动生效",
+            Type = "approval",
+            State = 1,
+            Content = System.Text.Encoding.UTF8.GetBytes(json),
+            Version = 1,
+        };
+        await _fx.Repo.SaveDefineAsync(define);
+        return define.Id.Value;
+    }
+
+    /// <summary>发起 + 办结申请节点，返回审批节点任务 id（真库行）。</summary>
+    private async Task<long> StartUntilApprovalAsync(long defineId)
+    {
+        var inst = await _fx.Engine.StartProcessInstanceByIdAsync(defineId, "applicant",
+            new FlowData { [FlowConst.BusinessNo] = "T1CS-surrogate" });
+        var apply = await FindDoingByActorAsync(_fx.Repo, inst.InstanceId!.Value, "applicant");
+        await _fx.Engine.ExecuteProcessTaskAsync(apply.TaskId!.Value, "applicant", new FlowData());
+        return (await FindDoingByActorAsync(_fx.Repo, inst.InstanceId.Value, "t1sur-actor")).TaskId!.Value;
+    }
+
+    private async Task SeedSurrogateAsync(string op, string agent, string? processName, int enabled,
+        DateTime? start = null, DateTime? end = null)
+    {
+        await _fx.ExtRepo.SaveSurrogateAsync(new ProcessSurrogate
+        {
+            ProcessName = processName,
+            Operator = op,
+            Surrogate = agent,
+            Enabled = enabled,
+            StartTime = start,
+            EndTime = end,
+            CreateTime = new DateTime(2026, 8, 1, 9, 0, 0),
+            CreateUser = "T1CS-SUR",
+            UpdateTime = new DateTime(2026, 8, 1, 9, 0, 0),
+            UpdateUser = "T1CS-SUR",
+        });
+    }
+
+    /// <summary>清理本用例写的委托台账行（按 create_user 标记，只删自己写的行）。</summary>
+    private async Task ClearSurrogateRowsAsync()
+    {
+        await using var conn = await _fx.Factory.OpenAsync();
+        await using var cmd = new MySqlCommand(
+            "DELETE FROM wf_process_surrogate WHERE create_user = @u OR operator = @op", conn);
+        cmd.Parameters.AddWithValue("@u", "T1CS-SUR");
+        cmd.Parameters.AddWithValue("@op", "t1sur-actor");
+        await cmd.ExecuteNonQueryAsync();
+    }
 }
 
 /// <summary>

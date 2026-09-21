@@ -265,6 +265,7 @@ public class JeeflowEngine
     {
         foreach (var task in exec.ProcessTaskList)
         {
+            await ApplySurrogateAsync(exec, task);
             await Repository.SaveTaskAsync(task);
             // TASK_START 在落库（分配 taskId）后 fire（spec §4.4 / issues/13）
             await NotifyTaskStartAsync(task);
@@ -274,6 +275,42 @@ public class JeeflowEngine
             await Repository.UpdateTaskAsync(exec.ProcessTask);
         }
         await Repository.UpdateInstanceAsync(exec.ProcessInstance!);
+    }
+
+    /// <summary>
+    /// 新任务落库唯一收口前的「委托自动生效」前置（issues/116 批次 D，契约 06 §4.5）——
+    /// 引擎内置、默认开启。发起 / 办理推进 / <b>串行会签每一步推进</b> / 跳转（jump、jumpToEnd、
+    /// rollback）<b>四条建任务路径全部经过这里</b>，只挂"发起"一处会漏掉流转中产生的新单。
+    ///
+    /// <para><b>顺序不能反</b>（条款 2 ⚠️）：此刻 <c>taskId</c> 可能尚未分配（由
+    /// <c>SaveTaskAsync</c> 内的 <c>IdGen.NextId()</c> 才分配），走"事后 <c>AddTaskActorAsync</c>
+    /// 补写"会打在空 id 上静默无效；故代理人并入<b>参与者集合本身</b>，再由 <c>SaveTaskAsync</c>
+    /// 随任务全量写进 <c>wf_process_task_actor</c>。</para>
+    ///
+    /// <para><b>回写路径一致性</b>：紧随其后的 <c>UpdateInstanceAsync</c> 会按聚合根副本对每个
+    /// 已落库任务<b>全量覆写参与者行</b>（C# 仓储既有语义）。因为 <c>instance.Tasks</c> 与
+    /// <c>exec.ProcessTaskList</c> 持同一 <see cref="ProcessTask"/> 引用，集合就地并入后两条写路径
+    /// 给出的参与者一致，代理人不会被覆写丢失——由用例钉住。</para>
+    ///
+    /// <para>开关：<see cref="ServiceContext.SurrogateAutoApply"/>（默认 true）；
+    /// 未配置 <see cref="ServiceContext.ExtRepository"/> 时由 applier 静默跳过（条款 4）。
+    /// 本方法另兜一层 try/catch：自定义 applier 报错也不得打断建单。</para>
+    /// </summary>
+    private async Task ApplySurrogateAsync(Execution exec, ProcessTask task)
+    {
+        if (!_context.SurrogateAutoApply) return;
+        try
+        {
+            // 条款 1.1：processName 认流程定义 name（deploy 有 def.Name = model.Name 不变量，
+            // 与流程 JSON 的 name 同值；跨栈对拍与台账匹配一律认库内这一列）
+            var processName = exec.ProcessModel?.Name;
+            await _context.SurrogateApplierOrDefault.ApplyAsync(task, processName, _context.ClockOrDefault.Now);
+        }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine(
+                $"[jeeflow] surrogate apply error, keep original actors: task={task.TaskName}: {e.Message}");
+        }
     }
 
     /// <summary>fire「任务开始」事件（TASK_START）：落库后逐任务，sourceId=taskId 可被反查。</summary>
