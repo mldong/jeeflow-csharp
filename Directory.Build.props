@@ -11,7 +11,7 @@
     <InvariantGlobalization>false</InvariantGlobalization>
     <CompressionEnabled>false</CompressionEnabled>
     <!-- 版本线：NuGet 独立 1.0.x（方案 §9 O1） -->
-    <Version>1.0.2</Version>
+    <Version>1.0.3</Version>
     <Authors>mldong</Authors>
     <Product>jeeflow</Product>
     <Description>jeeflow 工作流引擎 C#/.NET 实现（第 8 语言）</Description>
