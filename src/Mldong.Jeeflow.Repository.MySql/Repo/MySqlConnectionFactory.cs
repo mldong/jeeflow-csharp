@@ -39,11 +39,15 @@ public sealed class MySqlConnectionFactory
     /// - Pooling=true：.NET 侧连接池（每请求即取即用）
     /// - DefaultCommandTimeout=30：防悬挂
     /// - AllowUserVariables=false：只允许 ? 占位符（LIMIT/offset 内联非负整数，C21）
+    /// - TreatTinyAsBoolean=False：<b>必需</b>。`wf_process_surrogate.enabled` 在共享 DDL 里是
+    ///   `tinyint(1)`，MySqlConnector 默认把它当 bool ⇒ 脏值 2 读回来变 true→1，
+    ///   「enabled 只认整数 1」的读侧判据被驱动静默改写（issues/123 的 ④ 判据在 csharp 栈恒红）。
     /// DATETIME 读侧一律显式 GetDateTime/DBNull 处理（issues/37 教训，不依赖 DSN 魔法）。
     /// </summary>
     public string ConnectionString =>
         $"Server={Host};Port={Port};User ID={User};Password={Password};Database={Database};" +
-        "Pooling=true;DefaultCommandTimeout=30;AllowUserVariables=false;Character Set=utf8mb4";
+        "Pooling=true;DefaultCommandTimeout=30;AllowUserVariables=false;Character Set=utf8mb4;" +
+        "TreatTinyAsBoolean=False";
 
     public async Task<MySqlConnection> OpenAsync(CancellationToken ct = default)
     {
