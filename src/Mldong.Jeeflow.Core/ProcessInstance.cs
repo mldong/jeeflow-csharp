@@ -195,18 +195,18 @@ public class ProcessInstance
     /// <summary>
     /// 驳回任务（退回上一步）——血缘版（规范 04 · 退回上一步）：上一步来源＝当前行的 ParentTaskId，
     /// 复活调用方取出的那条历史行；不按模型入边拓扑推（拓扑版会回到本实例没走过的节点，且会
-    /// "静默返回 null 不建单"）。history 为 null ⇒ 20010007；canRejected 守卫不过 ⇒ 20010008。
-    /// 本栈异常无码位、出口统一 99999999，故码写在 msg 前缀（契约只要求"异常与 msg 可区分"）。
+    /// "静默返回 null 不建单"）。history 为 null ⇒ 无血缘文案；canRejected 守卫不过 ⇒ 守卫文案（引擎内部码 20010007、20010008 不进 msg）。
+    /// 本栈异常无码位、出口统一 99999999；对外 msg 用固定中文文案、不含引擎内部码（两格语义由文案区分）。
     /// </summary>
     public ProcessTask? RejectTask(ProcessModel model, ProcessTask currentTask, ProcessTask? history, IClock? clock = null)
     {
-        const string NoLineage = "20010007: 上一步任务ID为空，无法驳回至上一步处理";
+        const string NoLineage = "上一步任务ID为空，无法驳回至上一步处理";
         if (history == null) throw new JeeflowException(NoLineage);
         var current = model.GetNode(currentTask.TaskName);
         var parent = model.GetNode(history.TaskName);
         if (current == null || parent == null || !FlowUtil.CanRejected(current, parent))
         {
-            throw new JeeflowException("20010008: 无法驳回至上一步处理，请确认上一步骤并非fork、join、suprocess以及会签任务");
+            throw new JeeflowException("无法驳回至上一步处理，请确认上一步骤并非fork、join、suprocess以及会签任务");
         }
 
         // 复活行的变量只带数据类键（tf_ 与 csv_/会签簿记都是"上次提交"的残留）

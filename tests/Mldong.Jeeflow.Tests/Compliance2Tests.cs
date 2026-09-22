@@ -284,7 +284,7 @@ public class Compliance2Tests
             var who = row.ActorIds.FirstOrDefault() ?? "applicant";
             var ex = await Assert.ThrowsAsync<JeeflowException>(() =>
                 engine.ExecuteAndJumpTaskAsync(row.TaskId!.Value, who, new FlowData(), null));
-            Assert.Contains("20010007", ex.Message);
+            Assert.Contains("上一步任务ID为空，无法驳回至上一步处理", ex.Message); Assert.DoesNotContain("2001000", ex.Message);
             Assert.True((await repo.FindDoingTasksAsync(inst.InstanceId!.Value, null)).Count <= 1,
                 $"形状 {shape}：报错即不建单，不该凭空多出进行中任务");
         }

@@ -237,13 +237,13 @@ public class AggregateTests
 
         // 负向 1：无血缘（取不到历史行）⇒ 20010007，不得静默不建单
         var ex1 = Assert.Throws<JeeflowException>(() => inst.RejectTask(model, current, null));
-        Assert.Contains("20010007", ex1.Message);
+        Assert.Contains("上一步任务ID为空，无法驳回至上一步处理", ex1.Message); Assert.DoesNotContain("2001000", ex1.Message);
 
         // 负向 2：parent 不是 current 的祖先（这里是 task2 的**后继** task3）⇒ 20010008
         var t3Row = ProcessTask.Create(1, "task3", "总监审批", null, null, null,
             new List<string> { "boss" }, "boss", 13, false);
         var ex2 = Assert.Throws<JeeflowException>(() => inst.RejectTask(model, current, t3Row));
-        Assert.Contains("20010008", ex2.Message);
+        Assert.Contains("无法驳回至上一步处理，请确认上一步骤并非fork、join、suprocess以及会签任务", ex2.Message); Assert.DoesNotContain("2001000", ex2.Message);
     }
 }
 
