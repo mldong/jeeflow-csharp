@@ -159,25 +159,43 @@ public class MemoryExtRepository : IProcessExtRepository
 
     public virtual Task<ProcessSurrogate?> GetSurrogateAsync(string? op, string? processName, DateTime time)
     {
-        // 对齐 JDBC querySurrogate：operator=授权人 且 enabled=1 且 surrogate<>operator；
-        // 时间窗 start<=t<=end（起止为空表示不限）；优先 processName 精确匹配（id DESC 首行），
-        // 其次 process_name 为空的"全流程委托"兜底
-        ProcessSurrogate? exact = null;
-        ProcessSurrogate? wildcard = null;
-        foreach (var s in Surrogates.Values.OrderByDescending(x => x.Id))
+        // 规范 06 §4.5 条款 1.4（issues/123 修正后的判序）：**每个作用域各自先按主键 id 取最新一条**
+        // （不带任何生效判据过滤），再交 ProcessSurrogate.IsEffective 裁决那一条。
+        // 反过来写——先按 enabled=1 / 时间窗 / surrogate<>operator 把候选滤掉、剩下的才排序——
+        // 等价于"上一条窗内委托把用户后续改停用/改到未来的设置永久盖掉"，
+        // 正是 13 栈在 L2-17/L2-18 上恒并入的成因。
+        // 精确作用域那条判否后**仍要看全流程作用域的最新一条**（不得判否即止），
+        // 与 SQL 仓 MySqlExtRepository#getSurrogateAsync 同形（条款 6 双仓同答案）。
+        var exact = NewestInScope(op, processName, scopeGlobal: false);
+        if (exact != null && exact.IsEffective(op, time)) return Task.FromResult(exact);
+        var global = NewestInScope(op, processName, scopeGlobal: true);
+        return Task.FromResult(global != null && global.IsEffective(op, time) ? global : null);
+    }
+
+    /// <summary>
+    /// 取该授权人在指定流程作用域内**最新的一条**委托（id 最大）；只择优，不判生效。
+    /// <paramref name="scopeGlobal"/>=false ⇒ processName 精确匹配；true ⇒ 全流程委托（processName 为空）。
+    /// </summary>
+    private ProcessSurrogate? NewestInScope(string? op, string? processName, bool scopeGlobal)
+    {
+        if (op == null) return null;
+        ProcessSurrogate? best = null;
+        long bestId = long.MinValue;
+        foreach (var s in Surrogates.Values)
         {
-            if (s.Enabled != 1) continue;
             if (s.Operator == null || !s.Operator.Equals(op, StringComparison.Ordinal)) continue;
-            if (s.Surrogate == null || s.Surrogate.Equals(op, StringComparison.Ordinal)) continue;
-            if (s.StartTime != null && time < s.StartTime) continue;
-            if (s.EndTime != null && time > s.EndTime) continue;
-            if (s.ProcessName != null && processName != null &&
-                s.ProcessName.Equals(processName, StringComparison.Ordinal) && exact == null)
-                exact = CloneSurrogate(s);
-            if (string.IsNullOrEmpty(s.ProcessName) && wildcard == null)
-                wildcard = CloneSurrogate(s);
+            var inScope = scopeGlobal
+                ? string.IsNullOrEmpty(s.ProcessName)
+                : processName != null && string.Equals(s.ProcessName, processName, StringComparison.Ordinal);
+            if (!inScope) continue;
+            var id = s.Id ?? 0;
+            if (best == null || id > bestId)
+            {
+                best = s;
+                bestId = id;
+            }
         }
-        return Task.FromResult(exact ?? wildcard);
+        return best == null ? null : CloneSurrogate(best);
     }
 
     private static ProcessDesign CloneDesign(ProcessDesign d) => new()

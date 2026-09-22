@@ -238,22 +238,31 @@ public class MySqlExtRepository : IProcessExtRepository
 
     public virtual async Task<ProcessSurrogate?> GetSurrogateAsync(string? op, string? processName, DateTime time)
     {
+        if (op == null) return null;
         await using var lease = await RentAsync();
-        // 1. 精确匹配流程
-        var hit = await QuerySurrogateAsync(lease.Conn, op, processName, time);
-        if (hit != null) return hit;
-        // 2. 全流程委托兜底（process_name 为空）
-        return await QuerySurrogateAsync(lease.Conn, op, "", time);
+        // 规范 06 §4.5 条款 1.4（issues/123 修正后的判序）：**每个作用域各自先按主键 id 取最新一条**
+        // （SQL 不带任何生效判据过滤），再交 ProcessSurrogate.IsEffective 裁决那一条。
+        // 反过来写（SQL 先 `AND enabled = 1 AND surrogate <> ?` + 窗口条件，剩下的才 ORDER BY id DESC）
+        // 等价于"历史上出现过一条窗内委托就永久生效"——用户随后改停用、改到未来都不算数，
+        // 这就是 issues/123 里 13 栈"窗外 / enabled=0 / 脏值一律并入"的成因。
+        // 两个作用域各取自己最新的一条、各自裁决：精确作用域那条判否时**仍要看全流程作用域的最新一条**
+        // （不得判否即止）。内存仓 MemoryExtRepository#getSurrogateAsync 同形（条款 6 双仓同答案）。
+        var exact = await QueryNewestSurrogateAsync(lease.Conn, op, processName);
+        if (exact != null && exact.IsEffective(op, time)) return exact;
+        var global = await QueryNewestSurrogateAsync(lease.Conn, op, "");
+        return global != null && global.IsEffective(op, time) ? global : null;
     }
 
-    private async Task<ProcessSurrogate?> QuerySurrogateAsync(
-        MySqlConnection conn, string? op, string? processName, DateTime time)
+    /// <summary>取该授权人在指定流程作用域内**最新的一条**委托；只 ORDER BY id DESC LIMIT 1，
+    /// 不带任何生效判据（enabled / 时间窗 / 自委托）过滤。</summary>
+    private async Task<ProcessSurrogate?> QueryNewestSurrogateAsync(
+        MySqlConnection conn, string op, string? processName)
     {
         var sql = new StringBuilder(
             "SELECT id, process_name, operator, surrogate, start_time, end_time, enabled, " +
             "create_time, create_user, update_time, update_user FROM wf_process_surrogate " +
-            "WHERE operator = ? AND enabled = 1 AND surrogate <> ?");
-        var bind = new List<object?> { op, op };
+            "WHERE operator = ?");
+        var bind = new List<object?> { op };
         if (string.IsNullOrEmpty(processName))
         {
             sql.Append(" AND (process_name IS NULL OR process_name = '')");
@@ -263,9 +272,6 @@ public class MySqlExtRepository : IProcessExtRepository
             sql.Append(" AND process_name = ?");
             bind.Add(processName);
         }
-        sql.Append(" AND (start_time IS NULL OR start_time <= ?) AND (end_time IS NULL OR end_time >= ?)");
-        bind.Add(MySqlRepository.ToDb(time));
-        bind.Add(MySqlRepository.ToDb(time));
         sql.Append(" ORDER BY id DESC ");
         sql.Append(" LIMIT 1");
         await using var cmd = NewCmd(sql.ToString(), conn);

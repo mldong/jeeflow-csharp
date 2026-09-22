@@ -689,6 +689,76 @@ public class SurrogateAutoApplyTests
         }
     }
 
+    // ═══ issues/123 · 规范 06 §4.5 条款 1.4：多条并存时由「最新一条」裁决（内存仓侧）═══
+    // SQL 仓同形用例见 MySqlBehaviorSuite.T1_Surrogate_i123_*。
+    // 缺这几条，把实现改回"先滤生效、再从剩下的取最新"也不会红——而那个写法正是 13 栈
+    // 在 L2-17/L2-18 上恒并入的根因（上一条窗内委托会把用户后续设置永久盖掉）。
+
+    /// <summary>A 格：先配"窗内 + enabled=1"，再配一条更"新"的无效记录 ⇒ 建单不并入，
+    /// 且**旧的那条有效记录不得复活**（四种无效形状各一格）。
+    /// id 序刻意错开（旧 900 / 新 1000）——"更新"指的是主键最大，不是插入序末条。</summary>
+    [Fact]
+    public async Task S116_27_NewestInvalidBeatsOlderEffective_MemoryRepo()
+    {
+        var cases = new (string Why, string Agent, int Enabled, DateTime? Start, DateTime? End)[]
+        {
+            ("窗外（已过期）", "deputyExpired", 1, Now.AddDays(-10), Now.AddDays(-9)),
+            ("窗外（未开始）", "deputyFuture", 1, Now.AddDays(1), Now.AddDays(2)),
+            ("enabled=0", "deputyOff", 0, null, null),
+            ("enabled 脏值 2（契约：只认 1）", "deputyDirty", 2, null, null),
+            ("自委托（代理人就是授权人本人）", "leader", 1, null, null),
+        };
+        foreach (var (why, agent, enabled, start, end) in cases)
+        {
+            var h = NewHarness();
+            await LedgerAsync(h, "leader", "deputyOldValid",
+                start: Now.AddDays(-1), end: Now.AddDays(1), id: 900);      // 旧：窗内 + enabled=1
+            await LedgerAsync(h, "leader", agent, enabled: enabled,
+                start: start, end: end, id: 1000);                           // 新：由它裁决
+
+            var (_, taskId) = await StartToLeaderTaskAsync(h);
+            Assert.True(
+                (await PersistedActorsAsync(h, taskId)).SequenceEqual(new List<string> { "leader" }),
+                $"{why} ⇒ 最新一条不生效时不得并入代理人（旧的 deputyOldValid 更不得复活）");
+            Assert.True(
+                await h.Ext!.GetSurrogateAsync("leader", "simple", Now) == null,
+                $"{why} ⇒ 仓储判据本身也必须判否，不得回落到旧的窗内有效行");
+        }
+    }
+
+    /// <summary>B 格：作用域内**只有一条**"窗内 + enabled=1" ⇒ 必须并入。
+    /// 防 A 格的修法被写成恒不并入。</summary>
+    [Fact]
+    public async Task S116_28_SoleEffectiveRowStillApplied_MemoryRepo()
+    {
+        var h = NewHarness();
+        await LedgerAsync(h, "leader", "deputyOnly", start: Now.AddDays(-1), end: Now.AddDays(1));
+        var (_, taskId) = await StartToLeaderTaskAsync(h);
+        Assert.Equal(new List<string> { "leader", "deputyOnly" }, await PersistedActorsAsync(h, taskId));
+        var hit = await h.Ext!.GetSurrogateAsync("leader", "simple", Now);
+        Assert.Equal("deputyOnly", hit?.Surrogate);
+    }
+
+    /// <summary>精确作用域最新一条判否后**仍要看全流程作用域的最新一条**（不得判否即止）。
+    /// 钉 Java <c>JdbcProcessExtRepositoryTest#testSurrogateCrudAndGet</c> 的同一条形：
+    /// 精确那条已过期 ⇒ 兜底到全流程委托的代理人。</summary>
+    [Fact]
+    public async Task S116_29_ExactScopeInvalidStillFallsBackToGlobal_MemoryRepo()
+    {
+        var h = NewHarness();
+        // 全流程委托（processName 空）：有效，但 id 更小（不是"最新一条"跨作用域通吃）
+        await LedgerAsync(h, "leader", "deputyGlobal", processName: "",
+            start: Now.AddDays(-1), end: Now.AddDays(1), id: 900);
+        // 精确流程委托：id 最大但已过期 ⇒ 判否后仍要落到上面那条全流程委托
+        await LedgerAsync(h, "leader", "deputyExpired", processName: "simple",
+            start: Now.AddDays(-10), end: Now.AddDays(-9), id: 1000);
+
+        var hit = await h.Ext!.GetSurrogateAsync("leader", "simple", Now);
+        Assert.Equal("deputyGlobal", hit?.Surrogate);
+        var (_, taskId) = await StartToLeaderTaskAsync(h);
+        Assert.Equal(new List<string> { "leader", "deputyGlobal" }, await PersistedActorsAsync(h, taskId));
+    }
+
     // ── 辅助 ──
 
     /// <summary>改流程 JSON 顶层 name（<c>null</c> = 删掉该键 → 模型未带 name），造条款 1.1 的诱饵。

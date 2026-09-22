@@ -529,6 +529,92 @@ public class MySqlBehaviorSuite : RepositoryBehaviorSuite
         }
     }
 
+    /// <summary>
+    /// issues/123 · 规范 06 §4.5 条款 1.4 的 <b>SQL 仓</b> A/B 格（真库 <c>wf_process_surrogate</c>
+    /// + <c>wf_process_task_actor</c> 行）：同一 operator+processName 先落"窗内 + enabled=1"，
+    /// 再落一条更"新"（id 更大）的无效记录 ⇒ 建单时代理人<b>不</b>并入，
+    /// 且旧的那条有效记录<b>不得复活</b>（四种无效形状各一格）。
+    ///
+    /// 修复前的形状（SQL 里先 <c>AND enabled = 1 AND surrogate &lt;&gt; ?</c> + 窗口条件，
+    /// 剩下的才 <c>ORDER BY id DESC LIMIT 1</c>）在这五格上全部读成"命中旧的窗内行"⇒ 本用例必红；
+    /// 那正是 13 张交付物在 L2-17/L2-18 上恒并入的成因。
+    /// 内存仓同形用例见 <c>SurrogateAutoApplyTests.S116_27/28/29</c>（条款 6：两仓必须同答案）。
+    /// </summary>
+    [Fact]
+    public async Task T1_Surrogate_i123_NewestInvalidBeatsOlderValid_AndSoleValidStillApplies()
+    {
+        if (Skip) return; // SKIP_MYSQL=1
+        const string flowName = "T1CS-sur-i123";
+        const string actor = "t1sur-actor";
+        var defineId = await SaveSurrogateDefineAsync(flowName, actor);
+        var probe = new DateTime(2026, 8, 1, 9, 0, 0); // 与夹具 FixedClock 同刻
+        try
+        {
+            var cases = new (string Why, string Agent, int Enabled, DateTime? Start, DateTime? End)[]
+            {
+                ("窗外（已过期）", "t123NewExpired", 1, new DateTime(2020, 1, 1), new DateTime(2020, 12, 31)),
+                ("窗外（未开始）", "t123NewFuture",  1, new DateTime(2030, 1, 1), new DateTime(2030, 12, 31)),
+                ("enabled=0",              "t123NewOff",   0, null, null),
+                ("enabled 脏值 2（只认 1）", "t123NewDirty", 2, null, null),
+                ("自委托（代理人=授权人）",  actor,          1, null, null),
+            };
+            foreach (var (why, agent, enabled, start, end) in cases)
+            {
+                await ClearSurrogateRowsAsync();
+                // 旧：窗内 + enabled=1（id 小）
+                await SeedSurrogateAsync(actor, "t123OldValid", flowName, 1,
+                    new DateTime(2020, 1, 1), new DateTime(2030, 12, 31), id: 919991);
+                // 新：id 更大 ⇒ 由它裁决
+                await SeedSurrogateAsync(actor, agent, flowName, enabled, start, end, id: 919992);
+
+                var rows = await _fx.Repo.FindTaskActorsAsync(await StartUntilApprovalAsync(defineId));
+                Assert.True(rows.SequenceEqual(new List<string> { actor }),
+                    $"SQL 仓 {why} ⇒ 最新一条不生效时建单不得并入（实得 [{string.Join(",", rows)}]）");
+                var hit = await _fx.ExtRepo.GetSurrogateAsync(actor, flowName, probe);
+                Assert.True(hit == null,
+                    $"SQL 仓 {why} ⇒ 判据本身也必须判否，不得复活旧的 t123OldValid 行（实得 {hit?.Surrogate}）");
+
+                // 条款 6：同一份数据喂内存仓，两仓必须同答案
+                var mem = NewMemoryExt();
+                await mem.SaveSurrogateAsync(new ProcessSurrogate
+                {
+                    Id = 919991, ProcessName = flowName, Operator = actor, Surrogate = "t123OldValid",
+                    Enabled = 1, StartTime = new DateTime(2020, 1, 1), EndTime = new DateTime(2030, 12, 31),
+                    CreateUser = "T1CS-SUR",
+                });
+                await mem.SaveSurrogateAsync(new ProcessSurrogate
+                {
+                    Id = 919992, ProcessName = flowName, Operator = actor, Surrogate = agent,
+                    Enabled = enabled, StartTime = start, EndTime = end, CreateUser = "T1CS-SUR",
+                });
+                Assert.True(await mem.GetSurrogateAsync(actor, flowName, probe) == null,
+                    $"内存仓 {why} ⇒ 与 SQL 仓同判否（条款 6 双仓同答案）");
+            }
+
+            // ── B 格：作用域内只有一条"窗内 + enabled=1" ⇒ 必须并入（防修成恒不并）──
+            await ClearSurrogateRowsAsync();
+            await SeedSurrogateAsync(actor, "t123Only", flowName, 1,
+                new DateTime(2020, 1, 1), new DateTime(2030, 12, 31), id: 919993);
+            Assert.Equal(new List<string> { actor, "t123Only" },
+                await _fx.Repo.FindTaskActorsAsync(await StartUntilApprovalAsync(defineId)));
+
+            // ── 精确作用域判否后仍要看全流程作用域的最新一条（不得判否即止）──
+            await ClearSurrogateRowsAsync();
+            await SeedSurrogateAsync(actor, "t123Global", "", 1,
+                new DateTime(2020, 1, 1), new DateTime(2030, 12, 31), id: 919994);  // 全流程：有效但 id 小
+            await SeedSurrogateAsync(actor, "t123ExactExpired", flowName, 1,
+                new DateTime(2020, 1, 1), new DateTime(2020, 12, 31), id: 919995);  // 精确：id 最大但已过期
+            Assert.Equal(new List<string> { actor, "t123Global" },
+                await _fx.Repo.FindTaskActorsAsync(await StartUntilApprovalAsync(defineId)));
+        }
+        finally
+        {
+            await ClearSurrogateRowsAsync();
+            await _fx.CleanupByMarkerAsync("surrogate");
+            _fx.RemoveDefine(defineId);
+        }
+    }
+
     /// <summary>同 SQL 侧用的委托数据在内存仓上重放，两仓 <c>getSurrogate</c> 结论逐一比对。</summary>
     private async Task VerifySameAnswerAsMemoryRepoAsync(string actor, string flowName)
     {

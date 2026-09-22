@@ -225,4 +225,30 @@ public class ProcessSurrogate
     public string? CreateUser { get; set; }
     public DateTime? UpdateTime { get; set; }
     public string? UpdateUser { get; set; }
+
+    /// <summary>
+    /// 四判据（规范 06 §4.5 条款 3/4 ＋ issues/123 §1）：本条委托此刻对该授权人是否生效。
+    ///
+    /// <para>① <c>Enabled</c> <b>严格等于整数 1</b>（0 / 2 等脏值 / <c>null</c> 一律不生效）；
+    /// ② 被委托人 trim 后非空，且不等于授权人本人（自委托不新增、不重复）；
+    /// ③ 时间窗覆盖判定时刻，<c>StartTime == null</c> = 下界不限、<c>EndTime == null</c> = 上界不限。</para>
+    ///
+    /// <para>⚠️ 调用方必须<b>先按主键 id 选出「该作用域内最新一条」再问本方法</b>——本方法只裁决
+    /// 单条，不做多条择优（规范 06 §4.5 条款 1.4）。反过来写（仓储先把 enabled/窗口/自委托滤掉、
+    /// 剩下的才排序取最新）等价于"历史上出现过一条窗内委托就永久生效"，用户随后改停用、改到未来
+    /// 都不算数——这正是 issues/123 里 13 栈"窗外 / enabled=0 / 脏值一律并入"的成因。
+    /// SQL 仓与内存仓必须走同一份判据（条款 6 要求双仓同答案）。</para>
+    /// </summary>
+    /// <param name="operatorId">授权人（判自委托：被委托人等于授权人 ⇒ 不新增）</param>
+    /// <param name="time">判定时刻（引擎取 <c>ServiceContext.Clock</c>，issues/120）</param>
+    public bool IsEffective(string? operatorId, DateTime time)
+    {
+        if (Enabled != 1) return false;                       // 只认 1；0 / 2 / null 一律不生效
+        var agent = Surrogate?.Trim();
+        if (string.IsNullOrWhiteSpace(agent)) return false;   // 被委托人空 ⇒ 不生效
+        if (agent == operatorId) return false;                // 自委托不新增、不重复
+        if (StartTime != null && time < StartTime) return false;
+        if (EndTime != null && time > EndTime) return false;
+        return true;
+    }
 }
