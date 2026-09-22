@@ -283,8 +283,10 @@ public class CustomModel : NodeModel
             !execution.Context.CustomHandlers.TryGetValue(name, out var handler))
             throw new JeeflowException($"自定义模型[class={Clazz}]实例化对象失败");
         await handler.HandleAsync(execution);
-        // 记录历史任务
+        // 记录历史任务（建单不变量：parent＝刚办结的那个任务，发起 execution 没有则为 null⇒落 0）
         execution.ProcessInstance!.CreateHistoryTask(this, execution.Operator,
+            execution.ProcessTask?.TaskId,
+            FlowUtil.IsFirstTaskName(execution.ProcessModel!, Name),
             execution.Context.ClockOrDefault);
         await RunOutTransitionAsync(execution);
     }

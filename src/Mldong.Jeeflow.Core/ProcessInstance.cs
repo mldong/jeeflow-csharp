@@ -249,14 +249,18 @@ public class ProcessInstance
         return newTask;
     }
 
-    /// <summary>创建历史任务记录（自定义节点用，直接 FINISHED）。</summary>
-    public ProcessTask CreateHistoryTask(CustomModel customModel, string? op, IClock? clock = null)
+    /// <summary>创建历史任务记录（自定义节点用，直接 FINISHED）。
+    /// 建单不变量同其它路径：parent 与首节点标记由调用点给真值（对齐 Java
+    /// <c>ProcessInstance.createHistoryTask</c> 与 <c>CustomModel</c> 的实参），
+    /// 不在这里写死 null/false——否则自定义节点把血缘链剪断，且是静默的。</summary>
+    public ProcessTask CreateHistoryTask(CustomModel customModel, string? op,
+                                         long? parentTaskId, bool isFirstTaskNode,
+                                         IClock? clock = null)
     {
         var task = ProcessTask.Create(
             InstanceId, customModel.Name, customModel.DisplayName,
             null, null, null, new List<string> { op ?? "" }, op,
-            // 自定义节点历史行不是 start 直接后继，也没有「刚办结的任务」可言
-            null, false, clock);
+            parentTaskId, isFirstTaskNode, clock);
         task.TaskState = (int)WfTaskState.Finished;
         Tasks.Add(task);
         return task;
