@@ -7,7 +7,7 @@ namespace Mldong.Jeeflow.Tests.Spike;
 /// <summary>
 /// M0 spike ②：MySqlConnector 连 160:3306——建表 + 1 查询 + 事务 begin/commit/rollback。
 /// R6：只动 jeeflow 库 wf_* 表外的临时 spike 表（9xxxxx 段命名 + 测后自清理）；
-/// SKIP_MYSQL=1 开发机跳过；凭据只走 JEFFLOW_DB_* env。
+/// SKIP_MYSQL=1 开发机跳过；DSN 走 TestDb（env 优先，未设兜底开发机测试库；兜底不进 src）。
 /// </summary>
 [Trait("Category", "mysql-smoke")]
 public class MySqlSmokeTests
@@ -21,7 +21,7 @@ public class MySqlSmokeTests
     public async Task Connect_CreateTable_Query_Transaction()
     {
         if (SkipMySql) return; // SKIP_MYSQL=1：开发机跳过（发版机 REQUIRE_MYSQL 口径见 M2）
-        var factory = MySqlConnectionFactory.FromEnv();
+        var factory = TestDb.Factory();
 
         // 1. 连接 + 建表
         await using var conn = await factory.OpenAsync();

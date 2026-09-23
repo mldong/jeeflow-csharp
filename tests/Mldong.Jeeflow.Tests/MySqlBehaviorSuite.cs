@@ -11,7 +11,8 @@ namespace Mldong.Jeeflow.Tests;
 /// - 行为双跑（与 Memory 同套件，防仓储分叉）
 /// - M1 分页五键 / M2 hydrate 主键 / 事务回滚无半完成实例 / 并发办理只一次成功
 /// - define 用 9xxxxx 段；实例以 BUSINESS_NO=T1CS- 前缀标记；测后自清理 + 清理验证
-/// - SKIP_MYSQL=1 开发机跳过；凭据只走 JEFFLOW_DB_* env；连不上=fail 不是 skip（发版机口径）
+/// - SKIP_MYSQL=1 开发机跳过；DSN 走 <see cref="TestDb"/>（JEFFLOW_DB_* env 优先，未设兜底开发机测试库，
+///   兜底只在测试工程、不进 src）；连不上=fail 不是 skip（发版机口径）
 /// </summary>
 [Collection("mysql")]
 [Trait("Category", "mysql-smoke")]
@@ -728,7 +729,7 @@ public class MySqlBehaviorSuite : RepositoryBehaviorSuite
 /// </summary>
 public sealed class MySqlFixture : IAsyncLifetime
 {
-    private readonly MySqlConnectionFactory _fx_factory = MySqlConnectionFactory.FromEnv();
+    private readonly MySqlConnectionFactory _fx_factory = TestDb.Factory();
     public MySqlConnectionFactory Factory => _fx_factory;
     public MySqlRepository Repo { get; private set; } = null!;
     public MySqlExtRepository ExtRepo { get; private set; } = null!;
