@@ -11,8 +11,9 @@ namespace Mldong.Jeeflow.Tests;
 /// - 行为双跑（与 Memory 同套件，防仓储分叉）
 /// - M1 分页五键 / M2 hydrate 主键 / 事务回滚无半完成实例 / 并发办理只一次成功
 /// - define 用 9xxxxx 段；实例以 BUSINESS_NO=T1CS- 前缀标记；测后自清理 + 清理验证
-/// - SKIP_MYSQL=1 开发机跳过；DSN 走 <see cref="TestDb"/>（JEFFLOW_DB_* env 优先，未设兜底开发机测试库，
-///   兜底只在测试工程、不进 src）；连不上=fail 不是 skip（发版机口径）
+/// - 排除本组用例用 --filter "Category!=mysql-smoke"（SKIP_MYSQL=1 已废弃：它把空跑计成通过）；
+///   DSN 走 <see cref="TestDb"/>（JEFFLOW_DB_* env 优先，未设兜底开发机测试库，兜底只在测试工程、不进 src）；
+///   连不上=fail 不是 skip（发版机口径）
 /// </summary>
 [Collection("mysql")]
 [Trait("Category", "mysql-smoke")]
@@ -22,8 +23,18 @@ public class MySqlBehaviorSuite : RepositoryBehaviorSuite
 
     public MySqlBehaviorSuite(MySqlFixture fx) => _fx = fx;
 
+    /// <summary>
+    /// SKIP_MYSQL=1 已废弃：它让这 21 条在没库的机器上**空跑却计成"通过"**（vacuous pass），
+    /// "204 全绿"里藏着 21 条没执行任何断言的用例。要排除请改用过滤，让总数掉下来而不是冒充绿：
+    /// <c>dotnet test --filter "Category!=mysql-smoke"</c>
+    /// 设了 SKIP_MYSQL 就故意让它变红（发版机口径：连不上=fail，R6）。
+    /// </summary>
     private static bool Skip =>
-        Environment.GetEnvironmentVariable("SKIP_MYSQL") == "1";
+        Environment.GetEnvironmentVariable("SKIP_MYSQL") == "1"
+            ? throw new Xunit.Sdk.XunitException(
+                "SKIP_MYSQL=1 已废弃（会把未执行的用例计成通过）。请改用 --filter \"Category!=mysql-smoke\" 排除，" +
+                "或不设该变量让本组用例真跑 160 测试库。")
+            : false;
 
     protected override (JeeflowEngine Engine, MemoryRepository? Mem, IProcessRepository Repo) Build() =>
         (_fx.Engine, null, _fx.Repo);

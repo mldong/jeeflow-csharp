@@ -7,13 +7,19 @@ namespace Mldong.Jeeflow.Tests.Spike;
 /// <summary>
 /// M0 spike ②：MySqlConnector 连 160:3306——建表 + 1 查询 + 事务 begin/commit/rollback。
 /// R6：只动 jeeflow 库 wf_* 表外的临时 spike 表（9xxxxx 段命名 + 测后自清理）；
-/// SKIP_MYSQL=1 开发机跳过；DSN 走 TestDb（env 优先，未设兜底开发机测试库；兜底不进 src）。
+/// 排除本组用例用 --filter "Category!=mysql-smoke"（SKIP_MYSQL=1 已废弃：空跑会被计成通过）；
+/// DSN 走 TestDb（env 优先，未设兜底开发机测试库；兜底不进 src）。
 /// </summary>
 [Trait("Category", "mysql-smoke")]
 public class MySqlSmokeTests
 {
+    /// <summary>SKIP_MYSQL=1 已废弃（空跑计成通过＝假绿）；排除请用 --filter "Category!=mysql-smoke"。详见 MySqlBehaviorSuite.Skip。</summary>
     private static bool SkipMySql =>
-        Environment.GetEnvironmentVariable("SKIP_MYSQL") == "1";
+        Environment.GetEnvironmentVariable("SKIP_MYSQL") == "1"
+            ? throw new Xunit.Sdk.XunitException(
+                "SKIP_MYSQL=1 已废弃（会把未执行的用例计成通过）。请改用 --filter \"Category!=mysql-smoke\" 排除，" +
+                "或不设该变量让本组用例真跑 160 测试库。")
+            : false;
 
     private const string SpikeTable = "wf_csharp_spike_9xxxxx";
 

@@ -26,8 +26,13 @@ public class PersistSmokeTests
 
     public PersistSmokeTests(MySqlFixture fx) => _fx = fx;
 
+    /// <summary>SKIP_MYSQL=1 已废弃（空跑计成通过＝假绿）；排除请用 --filter "Category!=mysql-smoke"。详见 MySqlBehaviorSuite.Skip。</summary>
     private static bool Skip =>
-        Environment.GetEnvironmentVariable("SKIP_MYSQL") == "1";
+        Environment.GetEnvironmentVariable("SKIP_MYSQL") == "1"
+            ? throw new Xunit.Sdk.XunitException(
+                "SKIP_MYSQL=1 已废弃（会把未执行的用例计成通过）。请改用 --filter \"Category!=mysql-smoke\" 排除，" +
+                "或不设该变量让本组用例真跑 160 测试库。")
+            : false;
 
     /// <summary>构造带 persist 拦截器的 facade（postInterceptors 声明名挂载，模型级）。</summary>
     private JeeflowFacade NewPersistFacade(string bizTable)
