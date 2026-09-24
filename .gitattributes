@@ -2,3 +2,7 @@
 *.json eol=lf
 *.cs eol=lf
 *.md eol=lf
+
+# 建表 SQL 副本由 jeeflow-hub/scripts/sync-schema.sh 分发：blob 与工作树一律 LF
+# （本仓此前只标了 *.text/*.json/*.cs/*.md，漏了 *.sql）
+*.sql text eol=lf
