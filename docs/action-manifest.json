@@ -120,7 +120,7 @@
           "permission": null,
           "note": "登录即可访问（放行）",
           "req": "{id} 双收",
-          "resp": "实例全字段 + variables + formData（f_ 前缀带/去前缀双键）+ jsonObject + tasks[]（vo+ext.isFirstTaskNode）+ activeTaskList（仅 DOING）；不存在→流程实例不存在"
+          "resp": "实例全字段 + ext（issues/124：变量唯一对外出口）+ formData（f_ 前缀带/去前缀双键）+ jsonObject + tasks[]（vo+ext.isFirstTaskNode）+ activeTaskList（仅 DOING）；不存在→流程实例不存在"
         },
         {
           "action": "processInstance/startAndExecute",

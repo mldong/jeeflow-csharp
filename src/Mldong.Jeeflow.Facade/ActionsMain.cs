@@ -134,7 +134,7 @@ public partial class JeeflowFacade
             ["parentNodeName"] = inst.ParentNodeName,
             ["businessNo"] = inst.BusinessNo,
             ["operator"] = inst.Operator,
-            ["variables"] = inst.Variables,
+            ["ext"] = inst.Variables ?? new FlowData(), // issues/124：变量唯一对外出口，空变量出 {} 而非 null
             ["formData"] = FormDataOf(inst.Variables, FlowConst.FormDataPrefix), // issues/15
             ["createTime"] = inst.CreateTime?.ToString("yyyy-MM-dd HH:mm:ss"),
             ["createUser"] = inst.CreateUser,
@@ -528,8 +528,7 @@ public partial class JeeflowFacade
                 ["taskState"] = t.TaskState,
                 ["operator"] = t.ActorId,
                 ["finishTime"] = FmtTime(t.FinishTime),
-                ["variable"] = t.Variables,
-                ["ext"] = t.Variables,
+                ["ext"] = t.Variables, // issues/124：variable 原串出口下线
             };
             rows.Add(vo);
         }
