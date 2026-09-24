@@ -1,8 +1,11 @@
-*.text eol=lf
+*.txt eol=lf
 *.json eol=lf
 *.cs eol=lf
 *.md eol=lf
+# shell 脚本强制 LF：远端 Linux bash 对 CRLF 报 invalid option（moon 仓 smoke_t2.sh 教训）
+*.sh text eol=lf
 
 # 建表 SQL 副本由 jeeflow-hub/scripts/sync-schema.sh 分发：blob 与工作树一律 LF
-# （本仓此前只标了 *.text/*.json/*.cs/*.md，漏了 *.sql）
+# （本仓此前只标了 *.txt/*.json/*.cs/*.md，漏了 *.sql；首行的 *.text 是 *.txt 的笔误，
+#  实测仓内 *.text 与 *.txt 均 0 个文件，属死规则，改成能匹配的形状）
 *.sql text eol=lf
