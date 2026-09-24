@@ -54,6 +54,155 @@ public static class BusinessSeed
         new[] { "leader", "manager" }, new[] { "manager", "director" }, new[] { "director", "boss" }, new[] { "boss", "user1" },
     };
 
+    /// <summary>
+    /// 发起表单：f_ 前缀 = 实例变量，前端「申请信息」区读 formData/ext 回显（13 无 apply 节点故不列）。
+    /// 八栈同表同值同序——勿改勿重排。
+    /// 日期一律写死字面量，不按当前时钟算（八栈机器时区/系统时间各异，算出来会漂）。
+    /// 字段名严禁 amount / finalAmount——它们是 03-decision-expr、10-mixed-mode 条件表达式的判定变量，撞上会改流程走向。
+    /// </summary>
+    private static readonly Dictionary<long, Dictionary<string, object?>> FormByDefine = new()
+    {
+        [1] = new()
+        {
+            ["f_reason"] = "家中有事需请假", ["f_days"] = 3, ["f_leaveType"] = "annual",
+            ["f_startDate"] = "2026-09-01", ["f_endDate"] = "2026-09-03",
+        },
+        [2] = new()
+        {
+            ["f_reason"] = "项目上线后调休", ["f_days"] = 2, ["f_leaveType"] = "annual",
+            ["f_startDate"] = "2026-09-07", ["f_endDate"] = "2026-09-08",
+        },
+        [3] = new()
+        {
+            ["f_reason"] = "出差报销申请", ["f_days"] = 1, ["f_leaveType"] = "personal",
+            ["f_startDate"] = "2026-09-10", ["f_endDate"] = "2026-09-10",
+        },
+        [4] = new()
+        {
+            ["f_reason"] = "培训进修请假", ["f_days"] = 5, ["f_leaveType"] = "sick",
+            ["f_startDate"] = "2026-09-14", ["f_endDate"] = "2026-09-18",
+        },
+        [5] = new()
+        {
+            ["f_reason"] = "年假出行", ["f_days"] = 4, ["f_leaveType"] = "annual",
+            ["f_startDate"] = "2026-09-21", ["f_endDate"] = "2026-09-24",
+        },
+        [6] = new()
+        {
+            ["f_reason"] = "婚假申请", ["f_days"] = 10, ["f_leaveType"] = "personal",
+            ["f_startDate"] = "2026-09-28", ["f_endDate"] = "2026-10-07",
+        },
+        [7] = new()
+        {
+            ["f_reason"] = "病假休养", ["f_days"] = 6, ["f_leaveType"] = "sick",
+            ["f_startDate"] = "2026-10-12", ["f_endDate"] = "2026-10-17",
+        },
+        [8] = new()
+        {
+            ["f_reason"] = "产检假", ["f_days"] = 3, ["f_leaveType"] = "sick",
+            ["f_startDate"] = "2026-10-19", ["f_endDate"] = "2026-10-21",
+        },
+        [9] = new()
+        {
+            ["f_reason"] = "陪产假", ["f_days"] = 5, ["f_leaveType"] = "personal",
+            ["f_startDate"] = "2026-10-26", ["f_endDate"] = "2026-10-30",
+        },
+        [10] = new()
+        {
+            ["f_reason"] = "事假处理家务", ["f_days"] = 2, ["f_leaveType"] = "personal",
+            ["f_startDate"] = "2026-11-02", ["f_endDate"] = "2026-11-03",
+        },
+        [11] = new()
+        {
+            ["f_bizType"] = "purchase", ["f_budget"] = 12000, ["f_urgency"] = "normal",
+            ["f_desc"] = "采购一批开发板与传感器",
+        },
+        [12] = new()
+        {
+            ["f_reason"] = "部门例行调休", ["f_days"] = 1, ["f_leaveType"] = "annual",
+            ["f_startDate"] = "2026-11-09", ["f_endDate"] = "2026-11-09",
+        },
+        [14] = new()
+        {
+            ["f_reason"] = "外派学习请假", ["f_days"] = 7, ["f_leaveType"] = "annual",
+            ["f_startDate"] = "2026-11-16", ["f_endDate"] = "2026-11-22",
+        },
+        [15] = new()
+        {
+            ["f_reason"] = "丧假", ["f_days"] = 3, ["f_leaveType"] = "personal",
+            ["f_startDate"] = "2026-11-23", ["f_endDate"] = "2026-11-25",
+        },
+    };
+
+    /// <summary>
+    /// 办理表单：tf_ 前缀 = 任务变量，前端「办理表单」区读 taskFormData 回显。
+    /// 键 = 审批节点的 formKey；表里没有的 formKey 只落通用审批意见，不臆造字段。
+    /// 八栈同表同值同序——勿改勿重排。
+    /// </summary>
+    private static readonly Dictionary<string, Dictionary<string, object?>> TfByForm = new()
+    {
+        ["leave-form"] = new()
+        {
+            ["tf_approvedDays"] = 3, ["tf_needExtra"] = "no", ["tf_remark"] = "按项目排期核准，注意工作交接",
+        },
+        ["review-form"] = new()
+        {
+            ["tf_riskLevel"] = "low", ["tf_needLegalDoc"] = "no", ["tf_reviewOpinion"] = "条款与预算均无风险",
+        },
+        ["boss-form"] = new()
+        {
+            ["tf_finalDecision"] = "agree", ["tf_finalAmount"] = 8000, ["tf_bossNote"] = "同意，走年度预算",
+        },
+        ["check-form"] = new()
+        {
+            ["tf_invoiceOk"] = "yes", ["tf_amountChecked"] = 8000, ["tf_checkNote"] = "票据齐全，计入差旅科目",
+        },
+        ["countersign-form"] = new()
+        {
+            ["tf_signVote"] = "support", ["tf_signAmount"] = 5000, ["tf_signOpinion"] = "本条线无异议",
+        },
+        ["seq-form"] = new()
+        {
+            ["tf_seqStage"] = "first", ["tf_seqVote"] = "pass", ["tf_seqOpinion"] = "初审通过，转下一人",
+        },
+        ["approve-form"] = new()
+        {
+            ["tf_approveResult"] = "ok", ["tf_approveAmount"] = 8000, ["tf_approveNote"] = "审批通过",
+        },
+        ["ratio-form"] = new()
+        {
+            ["tf_ratioVote"] = "agree", ["tf_ratioOpinion"] = "达到比例即可通过",
+        },
+        ["veto-form"] = new()
+        {
+            ["tf_vetoResult"] = "pass", ["tf_vetoReason"] = "无异议",
+        },
+        ["form-a"] = new()
+        {
+            ["tf_branchA"] = "a1", ["tf_branchANote"] = "A 分支选方案 A1",
+        },
+        ["form-b"] = new()
+        {
+            ["tf_branchB"] = "b1", ["tf_branchBNote"] = "B 分支选方案 B1",
+        },
+        ["field-form"] = new()
+        {
+            ["tf_ownerName"] = "张三", ["tf_field"] = "tech", ["tf_fieldNote"] = "技术域评估通过",
+        },
+        ["operator-form"] = new()
+        {
+            ["tf_selfCheck"] = "done", ["tf_operatorNote"] = "发起人自查无误",
+        },
+        ["dept-form"] = new()
+        {
+            ["tf_deptAgree"] = "yes", ["tf_deptQuota"] = 8000, ["tf_deptNote"] = "同意占用本部门额度",
+        },
+        ["role-form"] = new()
+        {
+            ["tf_roleResult"] = "pass", ["tf_roleNote"] = "角色审批通过",
+        },
+    };
+
     /// <summary>种业务数据；失败逐条打日志不抛异常（demo 启动不被单条卡死）。</summary>
     public static async Task SeedAsync(JeeflowFacade facade)
     {
@@ -72,8 +221,11 @@ public static class BusinessSeed
                     var t = await TodoRowAsync(facade, actor, iid);
                     if (t is not null)
                     {
-                        await facade.FlowAsync("processTask/execute", Args(
-                            ("processTaskId", t["id"]), ("operator", actor), ("submitType", 1L)));
+                        // todoList 行同样带 formKey（facade TaskRowToMap），与 advance 同口径填办理表单
+                        var ex = Args(
+                            ("processTaskId", t["id"]), ("operator", actor), ("submitType", 1L));
+                        WithTaskForm(ex, t.GetValueOrDefault("formKey"));
+                        await facade.FlowAsync("processTask/execute", ex);
                     }
                     else
                     {
@@ -118,6 +270,10 @@ public static class BusinessSeed
     private static async Task<object?> StartInstanceAsync(JeeflowFacade facade, Row row)
     {
         var args = new FlowData { ["processDefineId"] = row.DefineId, ["operator"] = row.Operator };
+        // f_* 先铺、extra 后铺：已有的流程变量 amount / deptLeader 优先，不被表单值盖掉
+        if (FormByDefine.TryGetValue(row.DefineId, out var form))
+            foreach (var kv in form)
+                args[kv.Key] = kv.Value;
         if (row.Extra is not null)
             foreach (var kv in row.Extra)
                 args[kv.Key] = kv.Value;
@@ -154,8 +310,11 @@ public static class BusinessSeed
                     actor = actors?.FirstOrDefault(a => a is not null)?.ToString();
                 }
                 if (string.IsNullOrEmpty(actor)) continue;
-                var r = await facade.FlowAsync("processTask/execute", Args(
-                    ("processTaskId", t["id"]), ("operator", actor), ("submitType", 1L)));
+                // detail tasks 走 TaskVo，同样出口带 formKey；两处 execute 调用点必须同口径
+                var ex = Args(
+                    ("processTaskId", t["id"]), ("operator", actor), ("submitType", 1L));
+                WithTaskForm(ex, t.GetValueOrDefault("formKey"));
+                var r = await facade.FlowAsync("processTask/execute", ex);
                 if (IsOk(r)) progress = true;
                 else Console.Error.WriteLine($"[seed] advance execute iid={iid} actor={actor} 失败");
             }
@@ -186,6 +345,20 @@ public static class BusinessSeed
         var fd = new FlowData();
         foreach (var (key, value) in pairs) fd[key] = value;
         return fd;
+    }
+
+    /// <summary>
+    /// 办理表单落库：先给通用审批意见，再按该节点 formKey 覆盖专属字段。
+    /// 抽成 helper 是因为两处 execute 调用点（I14 特例 / advance 循环）必须同口径，
+    /// 否则八栈横评里同一节点会填出不一样的数据。
+    /// </summary>
+    private static void WithTaskForm(Dictionary<string, object?> ex, object? formKey)
+    {
+        ex["tf_approvalComment"] = "同意，情况已核实";
+        if (formKey is null) return;
+        if (TfByForm.TryGetValue(formKey.ToString() ?? string.Empty, out var fields))
+            foreach (var kv in fields)
+                ex[kv.Key] = kv.Value;
     }
 
     private static bool IsOk(Dictionary<string, object?>? resp)
