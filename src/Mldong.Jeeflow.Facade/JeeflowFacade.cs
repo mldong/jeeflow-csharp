@@ -479,6 +479,30 @@ public partial class JeeflowFacade
     }
 
     /// <summary>流程 JSON 中第一个任务节点 id（isFirstTaskNode 用）。</summary>
+    /// <summary>
+    /// issues/128：行上 <c>isFirstTaskNode</c> 的读取口径——与 Java
+    /// <c>Boolean.parseBoolean(String.valueOf(rowFirst))</c> 同语义：
+    /// 布尔直取；字符串走大小写不敏感的 "true"；其它（"1"、脏值）一律 false。
+    /// 不做"非空即真"，否则脏值会把行上的 false 翻成 true（那正是本案要修的覆写等价物）。
+    /// </summary>
+    private static bool RowFirstIsTrue(object? v) => v switch
+    {
+        null => false,
+        bool b => b,
+        _ => bool.TryParse(Convert.ToString(v), out var p) && p,
+    };
+
+    /// <summary>
+    /// issues/121 建单不变量 + issues/128 出口口径：<b>行上值优先</b>，只有存量行缺该键才按拓扑现算。
+    /// 现算带"仅进行中"判定，只够展示用，不能当引擎判据（Java 同注释，JeeflowFacade.java:313-316）。
+    /// </summary>
+    private static bool RowFirstOrCompute(IDictionary<string, object?> ext, bool doing,
+                                           string? taskName, string? firstTaskNodeId)
+    {
+        var rowFirst = ext.TryGetValue(FlowConst.IsFirstTaskNode, out var v) ? v : null;
+        return rowFirst != null ? RowFirstIsTrue(rowFirst) : doing && taskName == firstTaskNodeId;
+    }
+
     private static string? FirstTaskNodeId(Dictionary<string, object?>? jsonObject)
     {
         if (jsonObject != null &&

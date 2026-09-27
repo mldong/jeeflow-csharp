@@ -158,7 +158,8 @@ public partial class JeeflowFacade
             var ext = new Dictionary<string, object?>();
             foreach (var kv in t.Variables) ext[kv.Key] = kv.Value;
             var doing = t.TaskState == (int)WfTaskState.Doing;
-            ext["isFirstTaskNode"] = doing && t.TaskName == firstTaskNodeId;
+            // issues/128：这里曾无条件按拓扑覆写，把建单时写在行上的值盖掉 ⇒ 与其余七栈相反
+            ext[FlowConst.IsFirstTaskNode] = RowFirstOrCompute(ext, doing, t.TaskName, firstTaskNodeId);
             vo["ext"] = ext;
             tasks.Add(vo);
             if (doing) activeTaskList.Add(vo);
@@ -600,7 +601,10 @@ public partial class JeeflowFacade
         var doing = task.TaskState == (int)WfTaskState.Doing;
         var tExt = new Dictionary<string, object?>();
         foreach (var kv in task.Variables) tExt[kv.Key] = kv.Value;
-        tExt["isFirstTaskNode"] = false;
+        // issues/128：原写法先无条件 false、下面再无条件现算，两道合起来把行上值盖死。
+        // 先把行上值另存（缺键=null），两处出口都以它优先；def 取不到时也不掉回 false。
+        var rowFirstVal = tExt.TryGetValue(FlowConst.IsFirstTaskNode, out var rowFirstRaw) ? rowFirstRaw : null;
+        tExt[FlowConst.IsFirstTaskNode] = rowFirstVal != null && RowFirstIsTrue(rowFirstVal);
         vo["ext"] = tExt;
         // taskModel：流程定义中对应节点（显示名/表单/issues/62 form+ext）
         var inst = await _repository.FindInstanceByIdAsync(task.ProcessInstanceId);
@@ -611,7 +615,9 @@ public partial class JeeflowFacade
             vo["jsonObject"] = jsonObject;
             if (def != null)
             {
-                tExt["isFirstTaskNode"] = doing && task.TaskName == FirstTaskNodeId(jsonObject);
+                tExt[FlowConst.IsFirstTaskNode] = rowFirstVal != null
+                    ? RowFirstIsTrue(rowFirstVal)
+                    : doing && task.TaskName == FirstTaskNodeId(jsonObject);
                 try
                 {
                     var model = ModelParser.Parse(def.Content, _context);
