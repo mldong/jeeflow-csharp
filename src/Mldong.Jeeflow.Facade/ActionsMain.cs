@@ -35,7 +35,7 @@ public partial class JeeflowFacade
     private async Task<Dictionary<string, object?>> StartAndExecuteAsync(FlowData args)
     {
         var defineId = ToLong(args.GetObj(FlowConst.ProcessDefineIdKey));
-        var op = ToStr(args.GetObj("operator"), "user1");
+        var op = OperatorArg(args);
         var flowArgs = new FlowData();
         foreach (var kv in args)
         {
@@ -114,7 +114,7 @@ public partial class JeeflowFacade
     private async Task<Dictionary<string, object?>> InstancePageAsync(FlowData args)
     {
         var query = new JeeflowQueryParser().Parse(args);
-        var userId = ToStr(args.GetObj("operator"), "user1");
+        var userId = OperatorArg(args);
         query.Add("t.operator", "EQ", userId);
         var page = await _repository.PageInstancesAsync(query);
         return PageResultOut(page);
@@ -213,7 +213,7 @@ public partial class JeeflowFacade
     private async Task<Dictionary<string, object?>> TodoListAsync(FlowData args)
     {
         var query = new JeeflowQueryParser().Parse(args);
-        var userId = ToStr(args.GetObj("operator"), "user1");
+        var userId = OperatorArg(args);
         query.Add("pta.actor_id", "EQ", userId);
         var page = await _repository.PageTodoTasksAsync(query);
         return PageResultOut(page);
@@ -222,7 +222,7 @@ public partial class JeeflowFacade
     private async Task<Dictionary<string, object?>> DoneListAsync(FlowData args)
     {
         var query = new JeeflowQueryParser().Parse(args);
-        var userId = ToStr(args.GetObj("operator"), "user1");
+        var userId = OperatorArg(args);
         query.Add("t.operator", "EQ", userId);
         var page = await _repository.PageDoneTasksAsync(query);
         return PageResultOut(page);
@@ -231,7 +231,7 @@ public partial class JeeflowFacade
     private async Task<Dictionary<string, object?>> ExecuteAsync(FlowData args)
     {
         var taskId = ToLong(args.GetObj(FlowConst.ProcessTaskIdKey));
-        var op = ToStr(args.GetObj("operator"), "user1");
+        var op = OperatorArg(args);
         var submitType = ToInt(args.GetObj(FlowConst.SubmitType), (int)WfSubmitType.Agree);
         var flowArgs = new FlowData();
         foreach (var kv in args)
@@ -560,7 +560,7 @@ public partial class JeeflowFacade
     private async Task<Dictionary<string, object?>> CreateCcInstanceAsync(FlowData args)
     {
         var instanceId = ToLong(args.GetObj(FlowConst.ProcessInstanceIdKey));
-        var op = ToStr(args.GetObj("operator"), "user1");
+        var op = OperatorArg(args);
         var actorIds = args.GetObj("actorIds");
         if (actorIds is string || actorIds is not System.Collections.ICollection coll || coll.Count == 0)
         {
@@ -575,7 +575,7 @@ public partial class JeeflowFacade
     private async Task<Dictionary<string, object?>> UpdateCcStatusAsync(FlowData args)
     {
         var instanceId = ToLong(args.GetObj(FlowConst.ProcessInstanceIdKey));
-        var op = ToStr(args.GetObj("operator"), "user1");
+        var op = OperatorArg(args);
         await _repository.UpdateCcStatusAsync(instanceId!.Value, op);
         return Ok();
     }
@@ -583,7 +583,7 @@ public partial class JeeflowFacade
     private async Task<Dictionary<string, object?>> CcListAsync(FlowData args)
     {
         var query = new JeeflowQueryParser().Parse(args);
-        var userId = ToStr(args.GetObj("operator"), "user1");
+        var userId = OperatorArg(args);
         query.Add("cc.actor_id", "EQ", userId);
         var page = await _repository.PageCcInstancesAsync(query);
         return PageResultOut(page);
@@ -592,7 +592,7 @@ public partial class JeeflowFacade
     private async Task<Dictionary<string, object?>> TaskDetailAsync(FlowData args)
     {
         var taskId = ToLong(args.GetObj("id"));
-        var op = ToStr(args.GetObj("operator"), "user1");
+        var op = OperatorArg(args);
         var task = await _repository.FindTaskByIdAsync(taskId);
         if (task == null) return Error("任务不存在");
         var vo = TaskVo(task);

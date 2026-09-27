@@ -908,6 +908,18 @@ public class MySqlRepository : IProcessRepository
             var col = cond.Column;
             if (!whitelist.Contains(col)) continue; // 不在白名单，丢弃
             var val = cond.Value;
+            // issues/129 案 A 第二层：归属谓词列拿到空值 ⇒ 空页，而不是“这条条件不加”。
+            // 门面已把空串归一化成缺省（JeeflowFacade.OperatorArg），这一道防绕过门面直接调仓储的
+            // 调用方与将来的门面改动——只留门面那半不算修完（java 同形两层）。
+            // 只收归属列：下面那句“空值当作没填”是 m_LIKE_* 等<b>可选过滤</b>的通用放行，
+            // 照字面改成“空值即空页”会把可选过滤一起改坏。
+            if ((val == null || (val is string vs && vs.Trim().Length == 0))
+                    && string.Equals(cond.Operator, "EQ", StringComparison.OrdinalIgnoreCase)
+                    && PageQuery.OwnershipColumns.Contains(col))
+            {
+                sql.Append(" AND 1=0");
+                continue;
+            }
             if (val == null || (val is string s && s.Length == 0)) continue;
 
             switch (cond.Operator?.ToUpperInvariant())

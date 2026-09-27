@@ -445,6 +445,22 @@ public partial class JeeflowFacade
 
     internal static string ToStr(object? val, string def) => val?.ToString() ?? def;
 
+    /// <summary>
+    /// 归属/操作人入参归一化（issues/129 案 A · spec 06-facade.md:100 补句）。
+    ///
+    /// 空串与<b>缺键同档</b>：传 ""（或全空白）视同未传，一并回落 demo 缺省 user1。
+    /// 修前是 <c>ToStr(args.GetObj("operator"), "user1")</c>——只在 null 时兜缺省，显式空串
+    /// 原样落进 <c>query.Add("t.operator", "EQ", "")</c>，再被仓储“空值当作没填”那句通用放行
+    /// 丢掉 ⇒“我的实例/我的已办”读出<b>全库</b>（160 实测 25 行 vs user1 的 4 行，行上是别人的 operator）。
+    /// 门面归一化是第一层，仓储的归属兜底是第二层（MySqlRepository.BuildWhere /
+    /// MemoryRepository.ApplyConditions），两层都要在。
+    /// </summary>
+    internal static string OperatorArg(FlowData args)
+    {
+        var s = ToStr(args.GetObj("operator"));
+        return string.IsNullOrWhiteSpace(s) ? "user1" : s;
+    }
+
     /// <summary>系统代执行（flow.auto）/ 超级管理员（flow.admin）放行——<c>IsAllowed</c> 既有约定，
     /// 撤回（issues/114）与转办（issues/115）共用同一判据。</summary>
     internal static bool IsPrivilegedOperator(string? op) =>

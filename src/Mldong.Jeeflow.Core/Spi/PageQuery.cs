@@ -22,6 +22,17 @@ public class PageQuery
         return this;
     }
 
+    /// <summary>
+    /// 归属谓词列（issues/129 案 A）：这几列定义“这条记录属于谁”，空值绝不能等于“不过滤”。
+    /// 与门面归属落点一一对齐：pageInstances/doneList→t.operator、todoList→pta.actor_id、
+    /// ccList→cc.actor_id、任务分页 join 出的实例发起人→pi.operator。
+    /// 内存仓储与 MySQL 仓储共用这一处定义，避免同栈两仓各判各的。
+    /// </summary>
+    public static readonly HashSet<string> OwnershipColumns = new()
+    {
+        "t.operator", "pi.operator", "pta.actor_id", "cc.actor_id",
+    };
+
     /// <summary>单个查询条件（列别名.列名 / 操作符 / 值）。</summary>
     public class Condition
     {

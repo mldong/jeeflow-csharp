@@ -579,6 +579,15 @@ public class MemoryRepository : IProcessRepository
             var col = cond.Column;
             if (!whitelist.Contains(col)) continue;
             var val = cond.Value;
+            // issues/129 案 A 第二层（内存仓储同 MySQL 同形，同栈两仓结论必须一致）：
+            // 归属谓词列拿到空值 ⇒ 空页，而不是“这条条件不加”；非归属列仍走下面那句可选过滤通用放行。
+            if ((val == null || (val is string vs && vs.Trim().Length == 0))
+                    && string.Equals(cond.Operator, "EQ", StringComparison.OrdinalIgnoreCase)
+                    && PageQuery.OwnershipColumns.Contains(col))
+            {
+                filtered = Enumerable.Empty<Dictionary<string, object?>>();
+                continue;
+            }
             if (val == null || (val is string s && s.Length == 0)) continue;
             filtered = cond.Operator?.ToUpperInvariant() switch
             {

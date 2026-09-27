@@ -54,7 +54,7 @@ public partial class JeeflowFacade
     private async Task<Dictionary<string, object?>> DesignSaveAsync(FlowData args)
     {
         var ext = Ext();
-        var op = ToStr(args.GetObj("operator"), "user1");
+        var op = OperatorArg(args);
         var id = ToLong(args.GetObj("id"));
         ProcessDesign design;
         if (id == null)
@@ -329,7 +329,7 @@ public partial class JeeflowFacade
     private async Task<Dictionary<string, object?>> SurrogateSaveAsync(FlowData args)
     {
         var ext = Ext();
-        var op = ToStr(args.GetObj("operator"), "user1");
+        var op = OperatorArg(args);
         var id = ToLong(args.GetObj("id"));
         ProcessSurrogate surrogate;
         if (id == null)
@@ -362,7 +362,7 @@ public partial class JeeflowFacade
     private async Task<Dictionary<string, object?>> SurrogateUpdateAsync(FlowData args)
     {
         var ext = Ext();
-        var op = ToStr(args.GetObj("operator"), "user1");
+        var op = OperatorArg(args);
         var id = ToLong(args.GetObj("id"));
         if (id == null) return Error("id 缺失");
         var surrogate = await ext.FindSurrogateByIdAsync(id);
