@@ -750,10 +750,15 @@ public class MySqlRepository : IProcessRepository
     public virtual async Task<int[]> StatsPendingAndOverdueCountAsync()
     {
         await using var lease = await RentAsync();
+        // issues/125：逾期判据的 now 由引擎侧时钟出口供给并绑参（`Clock` 就是本类写 create_time/update_time
+        // 用的那把，内存仓 MemoryRepository 也用它），SQL 文本里不留 NOW()——
+        // MySQL 的 NOW() 取的是 @@session.time_zone 的墙钟，与 expire_time 所写的引擎钟可以差一个时区偏移。
         const string sql = "SELECT COUNT(*) AS pending, " +
-                           "SUM(CASE WHEN expire_time IS NOT NULL AND expire_time < NOW() THEN 1 ELSE 0 END) AS overdue " +
+                           "SUM(CASE WHEN expire_time IS NOT NULL AND expire_time < ? THEN 1 ELSE 0 END) AS overdue " +
                            "FROM wf_process_task WHERE task_state = 10";
         await using var cmd = NewCmd(sql, lease.Conn);
+        var now = Clock.Now; // 只取一次，pending/overdue 两半共用同一个瞬间
+        cmd.Parameters.Add(new MySqlParameter { Value = ToDb(now) });
         await using var rs = await cmd.ExecuteReaderAsync();
         if (!await rs.ReadAsync()) return new[] { 0, 0 };
         var pending = rs.GetInt32("pending");
