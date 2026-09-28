@@ -58,7 +58,21 @@ public static class FlowUtil
         return false;
     }
 
-    /// <summary>解析期待完成时间（变量引用 / 相对时间 5s/10m/24h/3d / 绝对时间）。</summary>
+    /// <summary>
+    /// 解析期待完成时间（变量引用 / 相对时间 5s/10m/24h/3d / 绝对时间）。三档<b>顺序不能变</b>：
+    /// ① <paramref name="args"/> 里有与表达式同名的键 ⇒ 取该键的值（<c>DateTime</c> / 毫秒时间戳 /
+    /// "yyyy-MM-dd HH:mm:ss" 串；<b>其它类型不落判，继续往下走</b>相对/绝对档）；
+    /// ② 以 <c>s|m|h|d</c> 结尾 ⇒ <c>clock.Now</c> + 偏移（<c>d</c> 走日历加天）；
+    /// ③ 把表达式本身当绝对时刻解析。
+    /// <para>解析不出 ⇒ 返回 <b>null</b>（这一列留空），绝不退回 <c>now()</c>——那等于静默造一个
+    /// "建单即逾期"的值，正是 issues/126 的病灶形状。</para>
+    /// <para>⚠️ 与 Java 的<b>故意差异</b>（issues/126 §1.9 条 3，八栈统一按本栈这份）：相对档前缀不是整数
+    /// （节点误配成 <c>xh</c>）时，Java 的 <c>Integer.parseInt</c> 会抛异常<b>打断建单</b>，
+    /// 本栈 <c>int.TryParse</c> 则<b>落穿</b>到绝对档、最终 NULL——配置写错不该让流程卡死。
+    /// 要改成"跟 Java 一样抛"必须八栈同批改、另立案。</para>
+    /// <para>钟一律由调用点注入（<c>clock ?? SystemClock.Instance</c>，issues/120）：本栈是八栈里唯一
+    /// 域层带钟注入的栈，改成裸 <c>DateTime.Now</c> 会让"到期时间"绕过时钟出口、测试失去确定性。</para>
+    /// </summary>
     public static DateTime? ProcessTime(string? expireTime, FlowData args, IClock clock)
     {
         if (string.IsNullOrEmpty(expireTime)) return null;
@@ -389,6 +403,11 @@ public class CountersignHandler : IHandler
             new List<object?>(ReadOperatorList(execution, node));
         next.Variables[$"{FlowConst.LoopCounter}_{node}"] = nextLoopCounter;
         next.Variables[$"{FlowConst.NrOfInstances}_{node}"] = total;
+        // issues/126 A · 写点⑤：这一支绕过 ProcessInstance.CreateTask 直建任务行，
+        // 聚合根为此开 ApplyNodeExpireTime 公开入口让它上同一把尺子——基准侧 boot2 的串行推进是回调
+        // createCountersignTask（ProcessTaskServiceImpl:485，内含 :524 那处到期写），
+        // 不补就是"首成员有到期时间、第二/第三位没有"。变量源＝实例变量，钟沿用本 execution 的注入钟。
+        instance.ApplyNodeExpireTime(next, _taskModel, execution.Context.ClockOrDefault);
         instance.Tasks.Add(next);
         execution.AddTask(next);
     }

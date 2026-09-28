@@ -140,6 +140,39 @@ public class ProcessInstance
         UpdateTime = (clock ?? SystemClock.Instance).Now;
     }
 
+    // ═══ 建单到期时间（issues/126 案 A · 基准＝boot2 内置版）═══
+
+    /// <summary>
+    /// 任务行的 <c>expire_time</c> 唯一尺子：在<b>建单那一刻</b>按节点到期表达式真算。
+    /// 表达式语义逐字取 <see cref="FlowUtil.ProcessTime"/>（变量名档 → 相对档 → 绝对档，顺序不变）。
+    /// <b>节点没配（null / 空串）⇒ 这一列保持 NULL</b>——不写 now()、不写 ''、不写 0（owner 2026-09-28）。
+    /// 赋一个"建单时刻"是病灶：那一行新建即逾期，跨栈逾期统计（<c>overdueTaskCount</c>）全失真。
+    /// </summary>
+    /// <param name="expr">节点上配的到期表达式（设计器 JSON 的 properties.expireTime）</param>
+    /// <param name="args">变量源：建单三处＝<b>实例变量</b>（boot2 的 execution.getArgs()）；
+    /// 回退新建＝<b>随行拷贝那份变量</b>（boot2 的 hisVariable）。两档搞混会让"表达式是个变量名"这一档跨栈得到不同答案。</param>
+    /// <param name="clock">本栈是八栈里唯一域层带钟注入的（issues/120）——一律沿调用点的钟，
+    /// 缺省才落 <see cref="SystemClock.Instance"/>；<b>不许</b>换成裸 <c>DateTime.Now</c>。</param>
+    private static void ApplyExpireTime(
+        ProcessTask task, string? expr, FlowData args, IClock? clock)
+    {
+        if (string.IsNullOrEmpty(expr)) return;   // 没配 ⇒ 这一列一动不动（保持 NULL）
+        task.ExpireTime = FlowUtil.ProcessTime(expr, args, clock ?? SystemClock.Instance);
+    }
+
+    /// <summary>建单三处的默认变量源＝实例变量（与 boot2 <c>execution.getArgs()</c> 同档）。</summary>
+    private void ApplyExpireTime(ProcessTask task, string? expr, IClock? clock) =>
+        ApplyExpireTime(task, expr, Variables, clock);
+
+    /// <summary>
+    /// 供处理器在"绕过 <see cref="CreateTask"/> 直建任务"的路径上补同一把尺子——issues/126：
+    /// 串行会签推进出的<b>下一位成员</b>就是这种路径。基准侧 boot2 的串行推进是回调
+    /// <c>createCountersignTask</c>（<c>ProcessTaskServiceImpl:485</c>，内含 <c>:524</c> 那处到期写），
+    /// 所以基准形状里"推进新建的那一位"同样带到期时间；不补就是"首成员有、后续没有"。
+    /// </summary>
+    public void ApplyNodeExpireTime(ProcessTask task, TaskModel taskModel, IClock? clock = null) =>
+        ApplyExpireTime(task, taskModel.ExpireTime, Variables, clock);
+
     /// <summary>创建普通任务。</summary>
     public ProcessTask CreateTask(
         TaskModel taskModel, string? displayName, List<string> actorIds,
@@ -149,6 +182,7 @@ public class ProcessInstance
             InstanceId, taskModel.Name, displayName,
             taskModel.TaskType, taskModel.PerformType,
             taskModel.Form, actorIds, op, parentTaskId, isFirstTaskNode, clock);
+        ApplyExpireTime(task, taskModel.ExpireTime, clock);   // issues/126 A · 写点①普通建单
         Tasks.Add(task);
         return task;
     }
@@ -175,6 +209,7 @@ public class ProcessInstance
             first.Variables[$"{FlowConst.CountersignOperatorList}_{node}"] = new List<object?>(actorIds);
             first.Variables[$"{FlowConst.LoopCounter}_{node}"] = 0;
             first.Variables[$"{FlowConst.NrOfInstances}_{node}"] = actorIds.Count;
+            ApplyExpireTime(first, taskModel.ExpireTime, clock);   // issues/126 A · 写点②串行会签首位成员
             list.Add(first);
             Tasks.Add(first);
             return list;
@@ -186,6 +221,7 @@ public class ProcessInstance
                 taskModel.TaskType, taskModel.PerformType,
                 taskModel.Form, new List<string> { actorId }, op,
                 parentTaskId, isFirstTaskNode, clock);
+            ApplyExpireTime(task, taskModel.ExpireTime, clock);   // issues/126 A · 写点③并行会签全员
             list.Add(task);
             Tasks.Add(task);
         }
@@ -241,10 +277,10 @@ public class ProcessInstance
             history.ParentTaskId,   // 随行拷贝＝"上一步的上一步"，与 mldong-boot2 一致
             isFirstRow, clock);
         newTask.Variables = vars;
-        if (current is TaskModel curTask && !string.IsNullOrEmpty(curTask.ExpireTime))
-        {
-            newTask.ExpireTime = FlowUtil.ProcessTime(curTask.ExpireTime, vars, clock ?? SystemClock.Instance);
-        }
+        // issues/126 A · 写点④退回/回退新建：并入同一把尺子。变量源仍是随行拷贝那份 vars
+        // （＝boot2 的 hisVariable），非空判据与钟的取法（clock ?? SystemClock.Instance）与改前逐字等价。
+        if (current is TaskModel curTask)
+            ApplyExpireTime(newTask, curTask.ExpireTime, vars, clock);
         Tasks.Add(newTask);
         return newTask;
     }
