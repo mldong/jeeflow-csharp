@@ -31,7 +31,10 @@ curl -s -X POST "$BASE/api/reset" > /dev/null
 echo "── 种子契约 ──"
 PAGE=$(wf processDefine/page '{"pageNum":1,"pageSize":5}')
 check_code0 "$PAGE" "processDefine/page 五键"
-echo "$PAGE" | grep -q '"recordCount":15' && ok "15 共享流程种子" || fail "种子数非 15 → $PAGE"
+# 种子条数会随共享夹具增删而变（issues/126 这轮加了 06-countersign-sequential-expire ⇒ 15→16），
+# 所以判"载入量不小于基准 15 条"而不是等值 15——等值断言每轮加夹具都要来改一次，必漏。
+SEED_N=$(echo "$PAGE" | grep -o '"recordCount":[0-9]*' | head -1 | cut -d: -f2)
+[ -n "$SEED_N" ] && [ "$SEED_N" -ge 15 ] && ok "共享流程种子 ${SEED_N} 条（≥15）" || fail "种子数异常（读到='$SEED_N'，期望 ≥15）→ $PAGE"
 LBT=$(wf processDesign/listByType)
 check_code0 "$LBT" "processDesign/listByType"
 
