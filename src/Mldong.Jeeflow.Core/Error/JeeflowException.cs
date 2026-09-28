@@ -15,6 +15,10 @@ public static class WfErr
     public const int ExistUnFinishInstance = 20010005;
     /// <summary>必需的 SPI 未注册</summary>
     public const int SpiNotRegistered = 20010006;
+    /// <summary>撤回的实例不是进行中(10)——已完成 20 / 已撤回 30 / 强行终止 40 / 已拒绝 45 /
+    /// 挂起 50 / 已废弃 99 一律不得被撤回改写（issues/134 案 A，owner 2026-09-28 拍板；
+    /// 20010007、20010008 为退回上一步占用）</summary>
+    public const int WithdrawInstanceNotDoing = 20010009;
 }
 
 /// <summary>工作流引擎异常（对齐 Java JeeflowException）。code=-1 时门面统一出口仍为 99999999 信封。</summary>
@@ -40,6 +44,8 @@ public class JeeflowException : Exception
         WfErr.NotAllowedExecute => "当前参与者不能执行该流程任务",
         WfErr.ExistUnFinishInstance => "存在正在未完成的流程实例，不允许删除！",
         WfErr.SpiNotRegistered => "必需的 SPI 未注册，请在 ServiceContext 注册实现",
+        // issues/134 案 A：文案八栈逐字统一，且**不带码值**（issues/121 口径——内部码不进出口 msg）。
+        WfErr.WithdrawInstanceNotDoing => "流程实例非进行中，无法撤回",
         _ => $"工作流错误({code})",
     };
 }

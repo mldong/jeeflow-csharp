@@ -116,9 +116,24 @@ public class ProcessInstance
     /// issues/113/114：只改写<b>进行中</b>任务（已完成 20 / 已终止 40 行不得被撤回改写），
     /// 且作用于整单（同实例全部进行中任务，不是只撤操作人自己那一条）；
     /// 实例与被撤任务的 <c>update_user</c> 都回写为真实撤回人。
+    ///
+    /// <para>issues/134 案 A（owner 2026-09-28 拍板）：撤回只允许<b>进行中(10)</b> 的实例。
+    /// 实例不是 10（已完成 20 / 已撤回 30 / 强行终止 40 / 已拒绝 45 / 挂起 50 / 已废弃 99，
+    /// 含 <c>State</c> 为 null 的未初始化形状——真实实例永远有状态，那一档同样落拒绝支）
+    /// ⇒ 抛内部码 <b>20010009</b>（<see cref="WfErr.WithdrawInstanceNotDoing"/>），
+    /// <b>一行都不改、不落库</b>。守卫必须排在下面的任务行循环<b>之前</b>：否则已办结实例会被
+    /// 静默改写成 30（凭空改历史、调用方看不到任何报错），那正是本案病灶。
+    /// 任务行层面那句"已完成/已终止行不改写"的既有保护保持原样。
+    /// 出口沿用 issues/121 口径：门面吞掉内部码 ⇒ <c>code=99999999</c> ＋ 逐字文案
+    /// 「流程实例非进行中，无法撤回」，文案不含码值。
+    /// 取时仍一律 <c>clock ?? SystemClock.Instance</c>（issues/120 域层钟注入，不退化成裸
+    /// <c>DateTime.Now</c>），守卫本身不取时。</para>
     /// </summary>
     public void Withdraw(string? op, IClock? clock = null)
     {
+        // 守卫排在任务行循环之前（issues/134 案 A）
+        if (!IsDoing())
+            throw new JeeflowException(WfErr.WithdrawInstanceNotDoing);
         foreach (var task in Tasks)
             if (task.IsDoing())
                 task.Withdraw(op, clock);

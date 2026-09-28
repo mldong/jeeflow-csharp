@@ -26,6 +26,9 @@
 
 - `ProcessInstance.CompleteTask/Withdraw/Finish/Reject/AbandonTask...`：状态只经聚合根方法修改；
   `Withdraw` → 实例 30 + 任务 30（非 45）；`updateInstance` 级联持久化聚合内任务状态。
+  **实例级守卫**（issues/134 案 A，owner 2026-09-28）：`Withdraw` 只允许**进行中(10)** 的实例，
+  非 10（20/30/40/45/50/99，含 `State` 为 null）⇒ 抛内部码 20010009，**一行都不改、不落库**，
+  门面出口 `code=99999999` ＋ 逐字文案 `流程实例非进行中，无法撤回`；任务行层面"已完成/已终止行不改写"保持原样。
 - `ProcessTask.Finish/Abandon/IsAllowed`：完成校验 DOING + 参与人。
 - 会签：串行逐个推进（任务变量 `operatorList_{node}/loopCounter_{node}/nrOfInstances_{node}`）；
   并行全量/表达式完成条件；`ONE_VOTE_VETO` 一票否决；merged 后废弃本节点残留 DOING。
@@ -43,5 +46,7 @@
 
 ## 错误与信封
 
-- 引擎错误抛 `JeeflowException`（code：20010001~20010006）。
+- 引擎错误抛 `JeeflowException`（code：20010001~20010006、20010009 撤回实例非进行中）。
+  退回上一步的 20010007/20010008 与 20010009 同守 issues/121 口径：**内部码不进出口 msg**，
+  对外只有 `99999999` ＋ 固定中文文案。
 - 门面出口恒 `{code, msg, data}`：成功 0；失败只发明 `99999999`；未知 action 同码。

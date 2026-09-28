@@ -193,7 +193,10 @@ public class AggregateTests
     [Fact]
     public void ProcessInstance_WithdrawOnlyDoingTasks()
     {
-        var inst = new ProcessInstance { InstanceId = 1 };
+        // 夹具补 state=10：issues/134 案 A 后撤回只允许进行中(10) 的实例，State 为 null 的
+        // 手工裸对象属"非进行中"⇒ 落守卫拒绝支。真实实例永远带状态（ProcessInstance.Create 即置 10），
+        // 这里把夹具的前显式化。**下面三条断言的期望值一字未改**（本案钉的是任务行层面的既有保护）。
+        var inst = new ProcessInstance { InstanceId = 1, State = (int)WfInstanceState.Doing };
         var done = ProcessTask.Create(1, "a", "A", null, null, null, new List<string> { "u" }, "u", null, false);
         done.Finish("u", null);
         var doing = ProcessTask.Create(1, "b", "B", null, null, null, new List<string> { "u" }, "u", null, false);
