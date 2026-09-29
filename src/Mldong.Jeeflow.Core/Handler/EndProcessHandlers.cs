@@ -68,6 +68,10 @@ public class EndProcessHandler : IHandler
             // 必须与任务一起上收到外层 execution（同 AddTasks 那条腿），漏一行
             // 就是"父实例终态事件整支丢掉"。
             execution.AddPendingEnds(newExec.PendingEnds);
+            // 同一条收口腿的 issues/142 档：父实例这一支若命中 custom（记录类）节点，
+            // 它的历史行挂在 newExec.HistoryTasks 上 ⇒ 不并上来就是"父流程的留痕行永远进不了库"。
+            // 这条与 AddTasks/AddPendingEnds 两腿平行，缺一不可（newExec 出了本方法就是孤儿对象）。
+            execution.AddHistoryTasks(newExec.HistoryTasks);
         }
     }
 }

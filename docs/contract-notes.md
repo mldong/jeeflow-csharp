@@ -23,4 +23,4 @@
 | addTaskActor 去重追加（C15） | AddTaskActorAsync |
 | 跨表列别名 + NULL 安全（C29/T10） | MySqlRepository 页查询/Get* 读取 |
 | stats 全纯列 + 缺参显式错误（C23） | Stats* |
-| 声明名不可解析显式报错（C20） | FindAssignmentHandler/NamedInterceptors/CustomModel |
+| 声明名不可解析显式报错（C20） | FindAssignmentHandler/NamedInterceptors（⚠️ custom 节点的 `clazz` 一档已由 issues/142 · spec 02 §6.2 第 2 条改判：空串／未注册 ⇒ 记日志＋照常落历史行＋令牌继续，不再外抛；处理器自身抛异常仍外抛） |

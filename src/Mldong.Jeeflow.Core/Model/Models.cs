@@ -268,8 +268,20 @@ public class DecisionModel : NodeModel
 }
 
 /// <summary>
-/// 自定义节点模型（对齐 Java CustomModel）：clazz 按名解析 IHandler 执行（C20 不可解析显式报错），
-/// 记录 FINISHED 历史任务后沿输出边驱动。反射方法调用路径为 Java 特有，C# 以注册表等价承载。
+/// 自定义节点模型（记录类节点，对齐 Java CustomModel）：clazz 按名解析 IHandler 执行。
+/// <para><b>issues/142 · spec 02 §6.2 两条改判</b>（owner 2026-09-30，与 java 同步跟改）：</para>
+/// <list type="number">
+/// <item>历史行要<b>真落库</b>——过去只 append 进聚合根 <c>Tasks</c> 就丢弃返回值，
+/// 而引擎 <c>PersistTasksAsync</c> 只保存 <c>ProcessTaskList</c>、
+/// <c>UpdateInstanceAsync</c> 级联只对 <c>TaskId != null</c> 的行发 UPDATE ⇒ 那条 FINISHED(20)
+/// 的行永远进不了 <c>wf_process_task</c>。现经 <see cref="Execution.HistoryTasks"/> 这条
+/// <b>与码 3 解耦</b>的通道落库（记录类不该有待办，不许 fire TASK_START）。</item>
+/// <item><c>clazz</c> 解析不了（空串／未注册）⇒ <b>记日志 + 照常落历史行 + 令牌继续</b>，
+/// 不再抛错打断建单（旧形状同 java 的"自定义模型[class=…]实例化对象失败"，
+/// 且本栈把两档合成同一个异常，覆盖面比 java 还宽）。
+/// 处理器<b>自身</b>抛异常不在豁免内：照旧外抛，那是业务错误不是配置形状错。</item>
+/// </list>
+/// 反射方法调用路径为 Java 特有，C# 以注册表等价承载。
 /// </summary>
 public class CustomModel : NodeModel
 {
@@ -280,16 +292,42 @@ public class CustomModel : NodeModel
 
     internal override async Task ExecAsync(Execution execution)
     {
-        var name = Clazz?.Trim();
-        if (string.IsNullOrEmpty(name) ||
-            !execution.Context.CustomHandlers.TryGetValue(name, out var handler))
-            throw new JeeflowException($"自定义模型[class={Clazz}]实例化对象失败");
-        await handler.HandleAsync(execution);
-        // 记录历史任务（建单不变量：parent＝刚办结的那个任务，发起 execution 没有则为 null⇒落 0）
-        execution.ProcessInstance!.CreateHistoryTask(this, execution.Operator,
+        var clazz = Clazz?.Trim();
+        if (string.IsNullOrEmpty(clazz))
+        {
+            // 档①：properties.clazz 压根没配（缺失／空串／纯空白）——配置形状问题，不打断建单。
+            // 文案带节点 name ⇒ 与档②可分别诊断（spec §6.2 第 2 条明确要求两档分开）。
+            execution.Context.LogWarning(
+                $"自定义节点[name={Name}] 未配置 clazz（properties.clazz 缺失/空串/纯空白）：" +
+                "跳过处理器执行，照常落记录类历史行，令牌继续流转（issues/142 · spec 02 §6.2 第 2 条）");
+        }
+        else if (!execution.Context.CustomHandlers.TryGetValue(clazz, out var handler))
+        {
+            // 档②：clazz 配了但注册表里没有（本栈按名注册，不像 java 反射 FQCN，
+            // 沿用共享夹具的 com.mldong.* 类名时这一档最容易命中）——同样记日志继续。
+            execution.Context.LogWarning(
+                $"自定义节点[name={Name}] clazz=[{clazz}] 未注册处理器（本栈注册表＝" +
+                "ServiceContext.CustomHandlers，按名解析）：跳过处理器执行，" +
+                "照常落记录类历史行，令牌继续流转（issues/142 · spec 02 §6.2 第 2 条）");
+        }
+        else
+        {
+            // 档③：处理器解析到了 ⇒ 执行。它**自身**抛的异常不在 §6.2 豁免内（照旧外抛）：
+            // 外部系统调用失败是业务错误，吞掉就等于把失败报成成功。
+            await handler.HandleAsync(execution);
+        }
+
+        // 记录历史任务（建单不变量：parent＝刚办结的那个任务，发起 execution 没有则为 null⇒落 0；
+        // 行级"首任务节点"标记随建单落 variable，血缘回退要用）。返回的历史行必须登记到
+        // HistoryTasks 这条腿——只 append 进聚合根 Tasks 不算落库（issues/142 缺陷 1）。
+        // ExpireTime 不在这里写：CustomModel 没有到期表达式可取（ModelParser 的 custom 档只解析
+        // clazz/methodName/args/val），按 issues/126「节点没配 ⇒ 该列保持 NULL」正是应有形状，java 基准同形。
+        var historyTask = execution.ProcessInstance!.CreateHistoryTask(this, execution.Operator,
             execution.ProcessTask?.TaskId,
             FlowUtil.IsFirstTaskName(execution.ProcessModel!, Name),
             execution.Context.ClockOrDefault);
+        execution.AddHistoryTask(historyTask);
+
         await RunOutTransitionAsync(execution);
     }
 }

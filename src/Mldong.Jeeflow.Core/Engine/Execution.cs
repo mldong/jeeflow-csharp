@@ -28,9 +28,49 @@ public class Execution
     /// </summary>
     private readonly List<PendingInstanceEnd> _pendingEnds = new();
 
+    /// <summary>
+    /// 记录类节点（<c>snaker:custom</c>）产生的历史行待落库队列（issues/142 · spec 02 §6.2 第 1 条）。
+    ///
+    /// <para><b>为什么单独一条通道，而不是塞进 <see cref="ProcessTaskList"/></b>：那条列表在引擎里是
+    /// 「新建待办」的落库收口点，<c>JeeflowEngine.PersistTasksAsync</c> 对它的每一步都是
+    /// <c>saveTask</c> → <c>notifyTaskStart</c>（<b>码 3 TASK_START</b>）。码 3 表达的是
+    /// "有一份新待办产生"，而记录类节点建出来的那一行<b>出生即 FINISHED(20)</b>、没有参与者可办
+    /// （spec 02 §6.1：它本来就不该有待办）⇒ 混进去就是给一条查不到的历史行广播一条假待办事件，
+    /// 集成层的站内信/角标会照着它去通知一个根本不该被通知的人。</para>
+    ///
+    /// <para>所以<b>「落库」与「fire 码 3」必须解耦</b>：本队列只走 <c>saveTask</c> 那半条腿，
+    /// <c>notifyTaskStart</c> 与委托自动生效（<c>ApplySurrogate</c>，它会把代理人并进参与者集合，
+    /// 等于在留痕行上凭空多挂一个"能办的人"）都不参与。基准侧 java 同样是两条腿（
+    /// <c>persistTasks</c> 只吃 <c>exec.getProcessTaskList()</c>，历史行由聚合根携带），
+    /// 缺的只是 INSERT 那一条——本栈与 java 本轮补的是同一条腿、同一个语义。</para>
+    ///
+    /// <para>随 execution 生死，与 <see cref="_pendingEnds"/> 同款（并发流转互不串味）。
+    /// 聚合根 <c>instance.Tasks</c> 里是<b>同一个对象引用</b> ⇒ 落库分配 taskId 后，
+    /// 紧随其后的 <c>UpdateInstanceAsync</c> 级联会照建单不变量把它当普通行覆写，不需要额外登记。</para>
+    /// </summary>
+    private readonly List<ProcessTask> _historyTasks = new();
+
     public void AddTask(ProcessTask task) => ProcessTaskList.Add(task);
 
     public void AddTasks(IEnumerable<ProcessTask> tasks) => ProcessTaskList.AddRange(tasks);
+
+    /// <summary>登记一条记录类历史行（只落库、不 fire 码 3，见 <see cref="_historyTasks"/>）。</summary>
+    public void AddHistoryTask(ProcessTask task) => _historyTasks.Add(task);
+
+    /// <summary>
+    /// 并入另一条 execution 的历史行——与 <see cref="AddTasks"/>／<see cref="AddPendingEnds"/>
+    /// 同一条收口腿：子流程办结时处理器在<b>父实例</b>的临时 execution 上继续流转，
+    /// 那个临时对象随即被丢弃 ⇒ 父实例这一支若命中 custom 节点，历史行不并上来就是"整支丢掉、
+    /// 留痕查不到"。
+    /// </summary>
+    public void AddHistoryTasks(IEnumerable<ProcessTask>? tasks)
+    {
+        if (tasks == null) return;
+        foreach (var t in tasks) _historyTasks.Add(t);
+    }
+
+    /// <summary>待落库的记录类历史行（引擎 <c>PersistTasksAsync</c> 消费）。</summary>
+    public IReadOnlyList<ProcessTask> HistoryTasks => _historyTasks;
 
     /// <summary>登记一条待播的实例终态事件（不 fire，见 <see cref="DrainPendingEnds"/>）。</summary>
     public void AddPendingEnd(PendingInstanceEnd? pendingEnd)

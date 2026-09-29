@@ -583,20 +583,24 @@ public class ComplianceTests
         var inst = await repo.FindInstanceByIdAsync(iid);
         Assert.Equal((int)WfInstanceState.Finished, inst!.State);
         Assert.True((bool)inst.Variables["customNodeRan"]!);
-        // Java 契约：custom 历史任务 taskId 为 null，级联持久化跳过——不落库（test08 宽松口径同源）
+        // issues/142 §6.2 第 1 条改判：这条 DONE 历史行**必须真进库**。
+        // 旧注释写的是「Java 契约：custom 历史任务 taskId 为 null，级联持久化跳过——不落库」——
+        // 那不是一条契约，是基准自身的洞（`persistTasks` 只存 DOING 列表、级联只对 taskId!=null 发 UPDATE，
+        // 而 ProcessTask.Create 从不赋 taskId ⇒ 留痕永远进不了库），而且本格原本对它零断言，
+        // 所以洞藏了两百多格测试都没照出来。现在补真断言：仓储读得到、且能按 taskId 反查。
+        var history = (await repo.FindHistoryTasksAsync(iid)).Where(t => t.TaskName == "custom1").ToList();
+        Assert.Single(history);
+        Assert.Equal((int)WfTaskState.Finished, history[0].TaskState);
+        Assert.NotNull(await repo.FindTaskByIdAsync(history[0].TaskId!.Value));
     }
 
-    [Fact]
-    public async Task Cxx_CustomNodeUnresolvableHandlerErrorsExplicitly()
-    {
-        // C20：声明名不可解析 → 显式错误（不静默跳过）
-        var (engine, repo, ctx) = TestInfra.NewEngineWithCtx();
-        ctx.CustomHandlers.Clear(); // 移除测试 handler，模拟未注册（C20 显式报错）
-        var didX = await TestInfra.SaveFlowDefineAsync(repo, "custom-node-x", TestInfra.LoadFlow("08-custom-node"));
-        var ex = await Assert.ThrowsAsync<JeeflowException>(
-            () => TestInfra.StartAndApplyAsync(engine, repo, didX));
-        Assert.Contains("实例化对象失败", ex.Message);
-    }
+    // Cxx_CustomNodeUnresolvableHandlerErrorsExplicitly 已删除（2026-09-30，issues/142 §5 第 2 条）：
+    // 它钉的是「clazz 不可解析 ⇒ 显式抛错打断建单」，owner 已把这档改判成
+    // 「记日志＋照常落历史行＋令牌继续」（与 spec/04 那条"节点属性配错不该把流程炸掉"同一条哲学）。
+    // 新形状由 CustomHistoryRow142Tests 的 UnregisteredClazzLogsAndStillPersistsHistoryRow /
+    // BlankClazzLogsAndStillPersistsHistoryRow / BlankAndUnregisteredArmsHaveDistinctDiagnosticMessages
+    // 三格钉住（含"未注册"与"空串"两档日志要能分别诊断），处理器自身抛错仍由
+    // ThrowingHandlerStillPropagates 钉"照旧外抛"。留这段注释是为了解释这里少了一格，不是漏写。
 }
 
 /// <summary>录制事件的监听器。</summary>

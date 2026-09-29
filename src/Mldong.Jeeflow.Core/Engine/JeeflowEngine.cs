@@ -284,6 +284,19 @@ public class JeeflowEngine
             // TASK_START 在落库（分配 taskId）后 fire（spec §4.4 / issues/13）
             await NotifyTaskStartAsync(task);
         }
+        // 记录类（custom）历史行的 INSERT 腿（issues/142 · spec 02 §6.2 第 1 条）——
+        // **只 saveTask，不 notifyTaskStart**：码 3 表达"新待办产生"，而这一行出生即 FINISHED(20)
+        // 、参与者恒等于当前操作人（留痕主体，不是收件人）⇒ 给它 fire 码 3 就是广播一条假待办。
+        // 也不走 ApplySurrogateAsync：那一步会把代理人并进 ActorIds，等于在留痕行上凭空多挂一个
+        // "能办的人"，与 §6.1「记录类不许兜底给别人」同族。
+        // 落库通道之所以在这里而不是 CustomModel 内部直连仓储：本栈全部任务写都收口在引擎这一处
+        // （模型/处理器层不碰仓储，见类头注释），且四条办理路径＋发起路径都过这里，一处覆盖全入口。
+        // 紧随其后的 UpdateInstanceAsync 级联会按建单不变量覆写这些行（此刻 taskId 已由 saveTask 分配），
+        // 与 DOING 行的处理完全同构，不需要额外的登记。
+        foreach (var historyTask in exec.HistoryTasks)
+        {
+            await Repository.SaveTaskAsync(historyTask);
+        }
         if (exec.ProcessTask?.TaskId != null)
         {
             await Repository.UpdateTaskAsync(exec.ProcessTask);

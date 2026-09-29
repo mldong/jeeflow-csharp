@@ -140,6 +140,36 @@ public sealed class ServiceContext
     /// <summary>action → 权限码（供码不鉴权，C24）。</summary>
     public string[]? PermissionCodes(string action) =>
         ActionPermissionProviderOrDefault.PermissionCodes(action);
+
+    /// <summary>
+    /// <b>internal 测试取证钩子</b>：诊断日志（WARNING）落地出口。默认 <c>null</c> ⇒ 走
+    /// <see cref="LogWarning"/> 的 stderr 通道（本栈 Core 零第三方依赖 ⇒ 没有 ILogger，
+    /// 既有惯例是 <c>Console.Error.WriteLine("[jeeflow] …")</c>，见
+    /// <c>JeeflowEngine.ApplySurrogateAsync</c>／<c>ProcessPublisher</c>／<c>SurrogateApplier</c>）。
+    ///
+    /// <para>存在的理由＝spec 02 §6.2 第 2 条把「clazz 不可解析」从"抛错打断建单"改判成
+    /// "记日志 + 照常落历史行 + 令牌继续"，且明确要求<b>「未注册」与「空串」两档的日志文案
+    /// 分别可诊断</b>。判据要打在"确实记了一条能定位到节点和 clazz 的日志"上，
+    /// 只断"没抛异常"等于什么都没测（吞掉一切也照样绿）。公开 API 面不因此扩成员
+    /// （对齐本仓 <c>InternalsVisibleTo</c> 取内存 cc 行本体那一贯姿势）。</para>
+    /// </summary>
+    internal Action<string>? WarningSinkForTest { get; set; }
+
+    /// <summary>
+    /// 记一条引擎级 WARNING（issues/142 · spec 02 §6.2 第 2 条）。
+    /// 生产出口＝stderr；设了 <see cref="WarningSinkForTest"/> 时只递交给该钩子（测试取证，
+    /// 不再打 stderr 以免污染真库档的日志读数）。
+    /// </summary>
+    internal void LogWarning(string message)
+    {
+        var line = "[jeeflow] WARN " + message;
+        if (WarningSinkForTest is { } sink)
+        {
+            sink(line);
+            return;
+        }
+        Console.Error.WriteLine(line);
+    }
 }
 
 /// <summary>有序拦截器条目。</summary>
