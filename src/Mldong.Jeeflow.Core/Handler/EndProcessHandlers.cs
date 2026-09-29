@@ -2,8 +2,9 @@ namespace Mldong.Jeeflow.Core;
 
 /// <summary>
 /// 结束流程实例处理器（对齐 Java EndProcessHandler）：
-/// submitType=2 REJECT → 实例 45，否则 FINISHED(20)；办结/拒绝两路都 fire 结束事件（C12/C13）；
-/// 父流程挂载点：子流程结束后驱动父流程子流程节点。
+/// submitType=2 REJECT → 实例 45，否则 FINISHED(20)；办结/拒绝两路都登记结束事件（码 2），
+/// 由引擎在实例行落库之后统一 fire（C12/C13 ＋ spec §11.2 原则 3）；
+/// 父流程挂载点：子流程结束后驱动父流程子流程节点，父实例的待播登记随任务一起上收。
 /// </summary>
 public class EndProcessHandler : IHandler
 {
@@ -24,14 +25,19 @@ public class EndProcessHandler : IHandler
             instance.Finish(execution.Context.ClockOrDefault);
         }
 
-        // 发布流程结束事件
-        await ProcessPublisher.NotifyAsync(
-            new ProcessEvent
-            {
-                EventType = ProcessEventType.ProcessInstanceEnd,
-                SourceId = execution.ProcessInstanceId,
-            },
-            execution.Context.EventListeners);
+        // 实例终态事件（spec §11.3 码 2 PROCESS_INSTANCE_END）：办结 20 与拒绝 45 共用这一支，
+        // 规范名不拆，靠载荷 state 分（§11.2 原则 2「码粗、载荷细」＋ §11.6 收口口径）。
+        //
+        // **只登记、不就地 fire**（§11.2 原则 3／08-compliance 场景 32「state 落库之后」）：
+        // 上面 Finish()/Reject() 只改了内存聚合根，实例那一行要等调用方——
+        // JeeflowEngine.PersistTasksAsync（或发起路径）的 UpdateInstanceAsync——才落库。
+        // 在这里 fire 就是"先播后写"，监听器（站内信反查、待办角标、persist 回写）当下
+        // 反查实例读到的是旧 state（本轮红基线实测：载荷承诺 20/45，那一行仍是 10），
+        // issues/121／issues/126 两轮"回写序"教训的同一族。
+        // 真正的 fire 收口在 JeeflowEngine.FlushInstanceEndEventsAsync；载荷键唯一形状见
+        // ProcessPublisher.NotifyInstanceEndAsync（instanceId ＋ 落库后的 state）。
+        execution.AddPendingEnd(new PendingInstanceEnd(
+            execution.ProcessInstanceId, instance.State, instance));
 
         // 子流程：如果当前流程有父流程，则继续执行父流程的子流程节点
         if (instance.ParentId != null)
@@ -57,6 +63,11 @@ public class EndProcessHandler : IHandler
             };
             await spm.ExecuteAsync(newExec);
             execution.AddTasks(newExec.ProcessTaskList);
+            // 父实例若被这一支流转带到终态，**它的**子流程节点会再进一次本处理器，
+            // 登记挂在 newExec 上；newExec 是这里的局部对象，随即丢弃 ⇒ 待播事件
+            // 必须与任务一起上收到外层 execution（同 AddTasks 那条腿），漏一行
+            // 就是"父实例终态事件整支丢掉"。
+            execution.AddPendingEnds(newExec.PendingEnds);
         }
     }
 }

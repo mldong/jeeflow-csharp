@@ -72,6 +72,11 @@ public class JeeflowEngine
             //    TASK_START 事件须在 saveTask 落库（分配 taskId）之后 fire（spec §4.4，issues/13）
             await PersistTasksAsync(exec);
             await Repository.UpdateInstanceAsync(instance);
+            // 实例终态事件（码 2）：发起即办结的短流（start→end、decision 直达结束）从这一支落库后播。
+            // PersistTasksAsync 内部已 flush 过一次（exec 就是这里的 exec），此处是 java 同款的第二道
+            // 显式收口点——队列已 drain 空时它是 no-op，但"发起路径有自己的 updateInstance"这件事
+            // 要求 flush 必须排在它之后，不能只依赖前者。顺序判据同 persistTasks 的收口。
+            await FlushInstanceEndEventsAsync(exec);
             return instance;
         });
     }
@@ -239,6 +244,11 @@ public class JeeflowEngine
         }
         await Repository.UpdateTaskAsync(task);
 
+        // spec 11-events §11.3 码 5/6：任务被办掉/被退回，两支都在<b>任务行 state 落库之后</b> fire，
+        // 且互斥（一次办理只发一支）——四条 execute 路径（execute/jump/jumpToEnd/rollbackToOperator）
+        // 都经 PrepareExecutionAsync 这一处收口，不在各分支重复埋点。
+        await NotifyTaskClosedAsync(instance, task, op, args);
+
         // 合并流程变量
         var mergedArgs = new FlowData();
         foreach (var kv in instance.Variables) mergedArgs[kv.Key] = kv.Value;
@@ -279,6 +289,58 @@ public class JeeflowEngine
             await Repository.UpdateTaskAsync(exec.ProcessTask);
         }
         await Repository.UpdateInstanceAsync(exec.ProcessInstance!);
+        // 实例终态事件（码 2）：紧跟上面那次 UpdateInstanceAsync —— 行的 state 已落库才允许播
+        await FlushInstanceEndEventsAsync(exec);
+    }
+
+    /// <summary>
+    /// 实例终态事件（码 2 <c>PROCESS_INSTANCE_END</c>）的统一收口——
+    /// spec §11.2 原则 3「只在落库之后 fire」／§11.3 码 2「实例 state 落库为 20/45 这类
+    /// "走到终点"的状态之后」／08-compliance 场景 32。
+    ///
+    /// <para>处理器（<c>EndProcessHandler</c>）只往 execution 挂 <see cref="PendingInstanceEnd"/>，
+    /// 本方法在实例行<b>真正落库之后</b>把它们播出去。两条路径都要覆盖，缺一即丢事件：</para>
+    /// <list type="bullet">
+    ///   <item><b>正常路径</b>：登记的就是本次 execution 的实例，行已由调用方那次
+    ///       <c>repository.UpdateInstanceAsync</c>（或发起路径的 <c>SaveInstanceAsync</c>＋
+    ///       <c>UpdateInstanceAsync</c>）写好 ⇒ 这里只补播，不重复写；</item>
+    ///   <item><b>子流程父实例路径</b>：子实例办结时处理器在<b>父实例</b>的 execution 上继续流转，
+    ///       父实例<b>不走</b>子流程这次的 <c>UpdateInstanceAsync</c>（历史缺口：父实例终态只改内存，
+    ///       那一行永远停在 10）⇒ 这里按登记带的聚合根补一次 <c>UpdateInstanceAsync</c>，再播。
+    ///       先写后播的顺序对父实例同样成立。</item>
+    /// </list>
+    ///
+    /// <para>载荷 state 取登记时刻的快照整数（＝刚落库那一行的值），不重读聚合根——登记之后
+    /// 流转还可能继续触碰该对象，重读会播出一个没写过的中间值。</para>
+    ///
+    /// <para>本栈可到达的终态档位：码 2 只由结束节点产生（办结 20／拒绝 45，
+    /// <c>EndProcessHandler</c> 是 <c>Finish()</c>／<c>Reject()</c> 的唯一调用者）。其余档位各自的
+    /// 归宿——30 撤回走门面 <c>processInstance/withdraw</c>（先 <c>UpdateInstanceAsync</c> 后 fire 码 8，
+    /// 写后播已满足；spec §11.3 码 8/9 明写"撤回只发 8 不补发 2"，故这里不扩火）；
+    /// 40 终止、50 挂起、99 废弃在 main 源<b>没有生产者</b>（<c>Interrupt</c>／<c>Pending</c>／
+    /// <c>AbandonTask</c> 生产路径零调用者）⇒ 对应门格按 unreachable 记账；将来出现写这些档位的
+    /// 收口点时，须在该次落库后补 fire，不得在集成层主动补发（spec §11.1）。</para>
+    ///
+    /// <para>副作用（顺带收口）：修复前码 2 在 <c>node.ExecuteAsync</c> 里就地 fire，流转后续步骤
+    /// 抛异常导致事务回滚时事件已经漏出去；现在事件排在写库之后，回滚的那次不再播。</para>
+    /// </summary>
+    private async Task FlushInstanceEndEventsAsync(Execution exec)
+    {
+        var pending = exec.DrainPendingEnds();
+        if (pending.Count == 0) return;
+        foreach (var end in pending)
+        {
+            var instance = end.Instance;
+            var ownInstance = instance == null
+                || (exec.ProcessInstanceId != null && exec.ProcessInstanceId.Equals(end.InstanceId));
+            if (!ownInstance)
+            {
+                // 父实例（或更上层）被这一支流转连带办结：它的行不在本次 updateInstance 范围内，补写
+                await Repository.UpdateInstanceAsync(instance!);
+            }
+            await ProcessPublisher.NotifyInstanceEndAsync(
+                end.InstanceId, end.State, _context.EventListeners);
+        }
     }
 
     /// <summary>
@@ -344,11 +406,67 @@ public class JeeflowEngine
     private async Task NotifyTaskStartAsync(ProcessTask? task)
     {
         if (task == null || task.TaskId == null) return;
+        // spec §11.3 码 3 直传载荷必备键：instanceId / taskId / actors。
+        // actors 取<b>落库后的参与者行集合</b>（与 saveTask 写的 wf_process_task_actor 同源，
+        // 委托自动生效 issues/116 已在 SaveTaskAsync 前并入集合 ⇒ 这里读到的就是最终收单人）；
+        // 仓储读空才回落聚合副本（与 java notifyTaskStart 同口径）。
+        var actors = await Repository.FindTaskActorsAsync(task.TaskId.Value);
+        if (actors.Count == 0) actors = new List<string>(task.ActorIds);
         await ProcessPublisher.NotifyAsync(
             new ProcessEvent
             {
                 EventType = ProcessEventType.ProcessTaskStart,
                 SourceId = task.TaskId,
+                Data = new FlowData
+                {
+                    ["instanceId"] = task.ProcessInstanceId,
+                    ["taskId"] = task.TaskId,
+                    ["actors"] = actors,
+                },
+            },
+            _context.EventListeners);
+    }
+
+    /// <summary>退回族 submitType（spec §11.3 码 6 的「含退发起人、软拒绝、跳转回退」四档）：
+    /// 2 REJECT／3 ROLLBACK／6 ROLLBACK_TO_OPERATOR／20 COUNTERSIGN_DISAGREE。
+    /// 其余（0 APPLY／1 AGREE／4 JUMP 前跳／5 RE_APPLY）一律算「任务被办掉」＝码 5。</summary>
+    private static readonly HashSet<int> RejectSubmitTypes = new()
+    {
+        (int)WfSubmitType.Reject,
+        (int)WfSubmitType.Rollback,
+        (int)WfSubmitType.RollbackToOperator,
+        (int)WfSubmitType.CountersignDisagree,
+    };
+
+    /// <summary>
+    /// fire「任务办结 5 / 任务退回 6」——<b>互斥</b>（spec §11.3 码 6 末注：同一动作走 reject
+    /// 就不再 fire complete）。两支共用码粗载荷细：不为拒绝/跳转/退发起人各开一号，
+    /// 靠载荷 <c>submitType</c> 区分（§11.2 原则 2）；缺省按 AGREE 处理，与
+    /// <c>EndProcessHandler</c> 读 submitType 的缺省同口径。
+    /// <para>调用点唯一：<see cref="PrepareExecutionAsync"/> 里 <c>UpdateTaskAsync</c> 之后——
+    /// 四个办理入口（常规办理／跳转／退结束／退发起人）都汇过这一处，任务行的 state
+    /// 就是在这次 updateTask 落库的（与 <see cref="NotifyTaskStartAsync"/> 之于 saveTask 同构）。</para>
+    /// </summary>
+    private async Task NotifyTaskClosedAsync(ProcessInstance instance, ProcessTask task,
+        string? op, FlowData args)
+    {
+        if (task.TaskId == null) return;
+        var submitType = args.GetInt(FlowConst.SubmitType, (int)WfSubmitType.Agree);
+        await ProcessPublisher.NotifyAsync(
+            new ProcessEvent
+            {
+                EventType = RejectSubmitTypes.Contains(submitType)
+                    ? ProcessEventType.TaskReject
+                    : ProcessEventType.TaskComplete,
+                SourceId = task.TaskId,
+                // spec §11.3 码 5/6 直传载荷必备键：instanceId / taskId / operator / submitType
+                Data = new FlowData
+                {
+                    ["instanceId"] = instance.InstanceId ?? task.ProcessInstanceId,
+                    ["taskId"] = task.TaskId,
+                    ["operator"] = op,
+                    ["submitType"] = submitType,
+                },
             },
             _context.EventListeners);
     }
@@ -372,23 +490,8 @@ public class JeeflowEngine
         if (ccArr is { Count: > 0 })
         {
             await Repository.CreateCcInstanceAsync(instanceId, op ?? "user1", ccArr.ToArray());
-            // CC_CREATE（issues/102）：逐抄送人 fire，ccActorId 直传事件体
-            await NotifyCcCreateAsync(instanceId, ccArr);
-        }
-    }
-
-    private async Task NotifyCcCreateAsync(long instanceId, List<string> ccArr)
-    {
-        foreach (var ccActorId in ccArr)
-        {
-            await ProcessPublisher.NotifyAsync(
-                new ProcessEvent
-                {
-                    EventType = ProcessEventType.CcCreate,
-                    SourceId = instanceId,
-                    CcActorId = ccActorId,
-                },
-                _context.EventListeners);
+            // CC_CREATE（issues/102）：cc 行落库之后逐抄送人 fire，ccActorId 直传事件体
+            await ProcessPublisher.NotifyCcCreateAsync(instanceId, ccArr, _context.EventListeners);
         }
     }
 

@@ -181,6 +181,14 @@ public partial class JeeflowFacade
         if (!await CanWithdrawAsync(inst, op!)) return Error("无权限撤回该流程实例");
         inst.Withdraw(op);
         await _repository.UpdateInstanceAsync(inst); // v1.0.1：级联持久化任务状态
+        // TASK_WITHDRAW（码 8）：撤回把实例 state 写 30 <b>落库之后</b> fire，
+        // 每轮撤回只 fire 一次、不逐任务（spec §11.3 码 8；上游 issues/134 的实例态守卫抛异常时
+        // 走不到这里，被撤的轮次不发事件——不发未成立事实的事件是 §11.2 原则 3 的另一面）。
+        await NotifyAsync(ProcessEventType.TaskWithdraw, inst.InstanceId, new FlowData
+        {
+            ["instanceId"] = inst.InstanceId,
+            ["operator"] = op,
+        });
         return Ok();
     }
 
@@ -569,6 +577,12 @@ public partial class JeeflowFacade
         var list = new List<string>();
         foreach (var o in coll) list.Add(o?.ToString() ?? "");
         await _repository.CreateCcInstanceAsync(instanceId!.Value, op, list.ToArray());
+        // CC_CREATE（码 4）：<b>手动抄送支也要 fire</b>——issues/132 §4.5 待拍① 按 spec §11.2 原则 1
+        // 定稿：码值表达"发生了什么事实"（新增了一条抄送记录），不表达"谁触发的"，
+        // 故引擎自动路径（f_ccActors／tf_ccActors）与门面手动路径共用同一个 fire 口
+        // ProcessPublisher.NotifyCcCreateAsync（行为基准＝Java 单一 notifyCcCreate，spec §11.7）。
+        // 集成层严禁再自行补发（§11.1，历史 PHP issues/101 就是这条降级路）。
+        await ProcessPublisher.NotifyCcCreateAsync(instanceId.Value, list, _context.EventListeners);
         return Ok();
     }
 
@@ -834,6 +848,17 @@ public partial class JeeflowFacade
         task.ActorIds = DedupKeepOrder(
             participants.Where(a => a != fromActor).Append(toActor!));
         await _repository.UpdateTaskAsync(task);
+        // TASK_TRANSFER（码 7）：任务参与者被替换<b>并落库之后</b> fire（spec §11.3 码 7）。
+        // 前面任一负向判据（必填／越权／非进行中／原人不是参与人／目标人已在）都 return 在这一行之前
+        // ⇒ 转办没成立就不发事件，不存在"补发"。
+        await NotifyAsync(ProcessEventType.TaskTransfer, task.TaskId, new FlowData
+        {
+            ["instanceId"] = task.ProcessInstanceId,
+            ["taskId"] = task.TaskId,
+            ["fromActor"] = fromActor,
+            ["toActor"] = toActor,
+            ["operator"] = op,
+        });
         return Ok();
     }
 
@@ -876,6 +901,13 @@ public partial class JeeflowFacade
         }
         return list;
     }
+
+    /// <summary>门面侧 fire 流程事件：与引擎共用 <see cref="ProcessPublisher"/>
+    /// （逐监听器隔离、零监听器安全返回，spec §11.5）。只在事实已落库之后由调用点触发。</summary>
+    private Task NotifyAsync(ProcessEventType eventType, long? sourceId, FlowData data) =>
+        ProcessPublisher.NotifyAsync(
+            new ProcessEvent { EventType = eventType, SourceId = sourceId, Data = data },
+            _context.EventListeners);
 
     private async Task<Dictionary<string, object?>> TaskLatestAsync(FlowData args)
     {

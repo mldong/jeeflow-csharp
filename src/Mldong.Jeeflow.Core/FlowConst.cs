@@ -135,13 +135,46 @@ public enum WfDefineState
     Enable = 1,
 }
 
-/// <summary>流程事件类型（4 号位 = CC_CREATE，issues/102 码值不重排）。</summary>
+/// <summary>流程事件类型——权威码表见 jeeflow-doc <c>docs/spec/11-events.md</c> §11.3（A 套整型）。
+/// <para><b>规范名是权威，码值只是本栈内部的附带数值</b>：集成层跨语言判据一律用规范名，
+/// 不得拿数字码当判据（各栈码值曾三套并存，132 §11.6 才收口）。成员名按 C# PascalCase 承载，
+/// 与规范名的逐字对应见各项注释；4 号位＝CC_CREATE（issues/102 码值不重排 + spec §11.6：
+/// 那一格由 Java 死码 PROCESS_TASK_END 让位，1/2/3 不变）。</para>
+/// <para>「同一事实只发一次」：5 TASK_COMPLETE 与 6 TASK_REJECT <b>互斥</b>——同一动作走 reject
+/// 就不再 fire complete（判据是载荷 submitType，见 <c>JeeflowEngine</c>）。</para></summary>
 public enum ProcessEventType
 {
+    /// <summary>1 <c>PROCESS_INSTANCE_START</c> 实例发起成功（实例行 insert 之后）。sourceId=instanceId。</summary>
     ProcessInstanceStart = 1,
+    /// <summary>2 <c>PROCESS_INSTANCE_END</c> 实例进入终态（办结/拒绝共用，靠载荷 state 分）。
+    /// 实例 state 更新为 20/30/40/45/50/99 之一并落库之后。sourceId=instanceId。</summary>
     ProcessInstanceEnd = 2,
+    /// <summary>3 <c>PROCESS_TASK_START</c> 新待办生成（含会签逐人、回退复活行、子流程任务）。
+    /// 每个任务行 saveTask 落库（分到 taskId）之后逐任务 fire。sourceId=taskId。</summary>
     ProcessTaskStart = 3,
+    /// <summary>4 <c>CC_CREATE</c> 新增一条抄送记录。cc 行落库之后<b>逐抄送人 fire 一次</b>；
+    /// 发起 <c>f_ccActors</c>／办理 <c>tf_ccActors</c>／手动 <c>createCCInstance</c> 三条路径同判
+    /// （spec §11.2 原则 1：事实是"存在一条新抄送记录"，与谁触发无关）。sourceId=instanceId。</summary>
     CcCreate = 4,
+    /// <summary>5 <c>TASK_COMPLETE</c> 任务被办掉（同意/跳转/会签办理）。
+    /// 任务行 state 更新为已完成并落库之后。sourceId=taskId。</summary>
+    TaskComplete = 5,
+    /// <summary>6 <c>TASK_REJECT</c> 任务被退回/拒绝（含退发起人、软拒绝、跳转回退）。
+    /// 退回动作使任务/实例落库之后；与 5 互斥。sourceId=taskId。</summary>
+    TaskReject = 6,
+    /// <summary>7 <c>TASK_TRANSFER</c> 转办发生。任务参与者被替换并落库之后。sourceId=taskId。</summary>
+    TaskTransfer = 7,
+    /// <summary>8 <c>TASK_WITHDRAW</c> 撤回发生（实例进入 30）。撤回把实例 state 写 30 落库之后
+    /// fire <b>一次</b>（每轮撤回只 fire 一次，不逐任务）。sourceId=instanceId。</summary>
+    TaskWithdraw = 8,
+    /// <summary>9 <c>INSTANCE_TERMINATED</c> 实例被终止（40 落库之后）。sourceId=instanceId。
+    /// <b>本栈暂无 fire 点</b>：门面 40+ action 里没有"终止实例"这一支（spec 06 动作清单同无，
+    /// issues/134 门面级注释已注明"门面没有终止实例的 action"），聚合根
+    /// <c>ProcessInstance.Interrupt</c> 只有测试调用。补 action 时必须在 UpdateInstanceAsync
+    /// <b>落库之后</b> fire 本码，不得先 fire 后落库。</summary>
+    InstanceTerminated = 9,
+    // 10+ 预留（超时催办／超时自动通过 …）：**本轮不发，仅占号防分叉**（spec §11.3 + §11.4 第 1 条：
+    // 八栈都没有时钟扫描器，发了没有触发源）。号一旦发出去不许改语义、不许复用（§11.2 原则 2）。
 }
 
 /// <summary>任务类型 codeOf（C4：code/'CODE'/中文 message 容错，兜底 Major）。</summary>

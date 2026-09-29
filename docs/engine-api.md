@@ -35,12 +35,24 @@
 
 ## 事件（引擎只 fire，副作用归集成层）
 
-| 事件 | 时机 |
-|---|---|
-| `ProcessInstanceStart` | 开始节点执行 |
-| `ProcessInstanceEnd` | 办结/拒绝（终态两路都 fire） |
-| `ProcessTaskStart` | 任务**落库后**逐任务（sourceId=taskId 可反查） |
-| `CcCreate` | 逐抄送人（ccActorId 直传事件体） |
+码表唯一权威＝`jeeflow-doc/docs/spec/11-events.md` §11.3（A 套整型，issues/127＋132 立章）。
+**规范名是权威，数字码只是本栈附带数值**——集成层跨语言判据一律用规范名（§11.6）。
+
+| 码 | 本栈成员名 | 规范名 | 时机（一律"落库之后"，§11.2 原则 3） | 直传载荷键 |
+|---|---|---|---|---|
+| 1 | `ProcessInstanceStart` | `PROCESS_INSTANCE_START` | 实例行 insert 之后、开始节点执行 | instanceId |
+| 2 | `ProcessInstanceEnd` | `PROCESS_INSTANCE_END` | 办结/拒绝两路都发；处理器**只登记不就地 fire**，由引擎在实例行 `UpdateInstanceAsync` 落库**之后**统一 flush（`FlushInstanceEndEventsAsync`，两个收口点：`PersistTasksAsync` 之后＋发起路径之后）；子流程级联里被连带办结的**父实例**不走子流程那次 update ⇒ flush 先按登记带的聚合根补写父实例那一行再播 | instanceId, state |
+| 3 | `ProcessTaskStart` | `PROCESS_TASK_START` | 任务**落库后**逐任务（sourceId=taskId 可反查；含会签逐人、回退复活行） | instanceId, taskId, actors |
+| 4 | `CcCreate` | `CC_CREATE` | cc 行落库后**逐抄送人**一次；发起 `f_ccActors`／办理 `tf_ccActors`／手动 `createCCInstance` **三条路径同判**（共用 `ProcessPublisher.NotifyCcCreateAsync`） | ccActorId（直传事件体） |
+| 5 | `TaskComplete` | `TASK_COMPLETE` | 任务行 state 落库之后（`PrepareExecutionAsync` 单点，四条办理入口全覆盖） | instanceId, taskId, operator, submitType |
+| 6 | `TaskReject` | `TASK_REJECT` | 同上；与 5 **互斥**——submitType ∈ {2,3,6,20} 只发 6 | instanceId, taskId, operator, submitType |
+| 7 | `TaskTransfer` | `TASK_TRANSFER` | 参与者被替换**并落库之后**（门面 `processTask/transfer`）；不伴随码 3 | instanceId, taskId, fromActor, toActor, operator |
+| 8 | `TaskWithdraw` | `TASK_WITHDRAW` | 实例 state 写 30 落库之后，**每轮只发一次**（不逐任务）；被 issues/134 守卫拒掉的那轮不发 | instanceId, operator |
+| 9 | `InstanceTerminated` | `INSTANCE_TERMINATED` | **本栈无 fire 点**：门面没有"终止实例"action，聚合根 `Interrupt` 生产路径零调用者 ⇒ 只占号 | instanceId, operator, reason |
+| 10+ | — | *预留* | 超时催办／超时自动通过等，**本轮不发**（八栈无时钟扫描器） | — |
+
+监听器为**列表**且按注册顺序回调；单个监听器抛异常只记日志，不回滚主流程、不中断后续监听器（C13/§11.5）；
+零注册时 fire 安全返回。集成层**严禁**在门面/业务侧主动补发事件（§11.1，PHP issues/101 的降级路已作废）。
 
 监听器逐个隔离：单监听器异常只记 stderr，不中断其余与主流程。
 

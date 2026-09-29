@@ -149,6 +149,8 @@ public class StartModel : NodeModel
             {
                 EventType = ProcessEventType.ProcessInstanceStart,
                 SourceId = execution.ProcessInstanceId,
+                // spec §11.3 码 1 直传载荷必备键：instanceId（实例行已由 SaveInstanceAsync 落库）
+                Data = new FlowData { ["instanceId"] = execution.ProcessInstanceId },
             },
             execution.Context.EventListeners);
         await RunOutTransitionAsync(execution);
