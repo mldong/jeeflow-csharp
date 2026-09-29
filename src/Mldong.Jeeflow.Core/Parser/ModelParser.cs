@@ -118,7 +118,8 @@ public static class ModelParser
         Dictionary<string, object?> node, List<object?> edges, ServiceContext context)
     {
         var id = Str(node, "id");
-        var type = (Str(node, "type") ?? "").Replace(NodeNamePrefix, "");
+        var rawType = Str(node, "type") ?? "";
+        var type = rawType.Replace(NodeNamePrefix, "");
         var nodeModel = type switch
         {
             "start" => new StartModel(),
@@ -128,10 +129,23 @@ public static class ModelParser
             "fork" => new ForkModel(),
             "join" => new JoinModel(),
             "custom" => new CustomModel(),
-            "wfSubProcess" or "subProcess" => new SubProcessModel(),
-            _ => (NodeModel?)null, // 未知类型：与 Java findByName=null 跳过一致
+            // 小写规范名（spec 02 的表立的就是它）＋ java 历史两档同值别名，一并接受（G4 义务 3）。
+            // 只认大写时，照文档写小写的定义会在本栈被当未知档丢弃——java 3d1fc98 已补，这里是 c# 补票。
+            "subprocess" or "wfSubProcess" or "subProcess" => new SubProcessModel(),
+            // 未知类型：与 Java findByName==null 一样跳过（不进模型），但**必须先留一条可诊断记录**
+            _ => (NodeModel?)null,
         };
-        if (nodeModel == null) return null;
+        if (nodeModel == null)
+        {
+            // issues/141 G4 义务 2（spec 02「类型键的三条义务」第 2 条）补票：本栈此前是**无声**丢节点
+            // ⇒ 一条被设计器写坏的定义在 c# 上跑起来"什么也没发生"，排查只能靠猜。
+            // java（ModelParser.java:84-88）与 php（ModelParser.php:112-113）同批已有，这里是补齐第三角。
+            // 文案三件齐：nodeId ＋ 实得类型串（含 snaker: 前缀原样）＋ 剥前缀后的查表键。
+            context.LogWarning(
+                "流程定义里的节点类型没有对应解析器，该节点及其出边将被跳过: "
+                + $"nodeId={id}, type={rawType}, lookupKey={type}");
+            return null;
+        }
 
         // 基本属性
         nodeModel.Name = id;

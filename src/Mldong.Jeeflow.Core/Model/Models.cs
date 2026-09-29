@@ -32,6 +32,20 @@ public class TransitionModel : BaseModel
         {
             await Target.ExecuteAsync(execution);
         }
+        else
+        {
+            // issues/143：出边的目标节点不在模型里 ⇒ 这条边**落穿**。
+            // 成因：解析期该类型未建档、节点被跳过（ModelParser.ParseNode 返回 null），
+            // 但**指向它的边**仍挂在上游节点的 Outputs 上，而 Target 只在目标节点存在于
+            // 模型里时才赋值 ⇒ 这里为 null。本栈原本静默 no-op：不崩（比 java 的 NPE、
+            // php 的 Call to a member function execute() on null 好），
+            // 但 spec 02 类型键义务 2 的「可诊断」也没兑现 ⇒ 补一条 WARNING 后**停住**，
+            // 不越过未知节点继续跑（未知档没被解析成任何模型，越过它等于用一条臆造的通路
+            // 把跑不通的定义跑成功）。与 rust/moon/go/python/node 的可观测结果一致。
+            execution.Context.LogWarning(
+                "转移出边的目标节点不在模型里（该节点类型未建档，解析期已跳过），本次流转停在这条边: "
+                + $"from={Source?.Name ?? "null"}, to={To}");
+        }
     }
 }
 
