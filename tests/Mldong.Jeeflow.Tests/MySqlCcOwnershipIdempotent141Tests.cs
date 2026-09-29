@@ -405,4 +405,121 @@ public class MySqlCcOwnershipIdempotent141Tests : IAsyncLifetime
         Assert.Equal(new List<string> { "8701" }, await _repo.FindCcActorIdsAsync(iid));
         Assert.Empty(_ccEvents);   // 手动腿的子集为空 ⇒ 整支不 fire（不空转）
     }
+
+    // ═══ G10：空抄送人不建 cc 行（owner 2026-09-29 拍「空不创建行」· spec 06 §2.10 · SQL 仓一路）═══
+    // 与内存一路的 CcBlankActorDropped141Tests 同判据同答案（issues/117 场景 27 那把尺子）：
+    // 判据单点＝PageQuery.NormalizeCcActors，漏斗层（引擎/门面）＋写侧层（本仓 CreateCcInstanceAsync
+    // ＋ SPI 默认实现 CreateCcInstanceIfAbsentAsync）两层都挡。普查实测的旧形状：
+    // 直连 <c>("", "   ", null, "8801")</c> ⇒ 真落 3 行（actor_id='' 与 '   ' 各一条）；
+    // <c>" 9201 "</c> ⇒ 原样落库带空格；IfAbsent 子集原样带回空值。
+
+    /// <summary>手动腿原始返回（全空白档要看它是不是与"空集合"同档，不能假定成功）。</summary>
+    private async Task<Dictionary<string, object?>> ManualCcRawAsync(long instanceId, params string[] actorIds) =>
+        await _facade.FlowAsync("processInstance/createCCInstance", new FlowData
+        {
+            [FlowConst.ProcessInstanceIdKey] = instanceId,
+            ["operator"] = "zhangsan",
+            ["actorIds"] = actorIds.Select(a => (object?)a).ToList(),
+        });
+
+    /// <summary>
+    /// 手动腿给全空白 ⇒ 库里一行都不许有、码 4 一支都不发，且与"空集合"同档
+    /// （既有 <c>actorIds 缺失</c> 文案，不新造错误语义）。
+    /// 改前实测：code=0（当成功）＋ 真落两行（actor_id='' 与 '   '）＋ fire 码 4 两次。
+    /// </summary>
+    [Fact]
+    public async Task BlankCcActorsCreateNoRowAtAll()
+    {
+        var iid = await NewInstanceAsync("g10-all-blank");
+        _ccEvents.Clear();
+
+        var resp = await ManualCcRawAsync(iid, "", "   ");
+
+        Assert.Equal("actorIds 缺失", resp["msg"]);                  // G10：全空白与空集合同档（spec 06 §2.10）
+        Assert.Equal(99999999, resp["code"]);
+        Assert.Equal(0, await CcRowCountAsync(iid));                 // G10：cc 表必须零行
+        Assert.Equal(new List<string>(), await _repo.FindCcActorIdsAsync(iid));
+        Assert.Empty(_ccEvents);                                     // G10：全空白不得 fire 码 4
+    }
+
+    /// <summary>混着给 ⇒ 只丢空元素，有效的人照旧建行＋fire。</summary>
+    [Fact]
+    public async Task BlankElementsAreDroppedValidOnesRemain()
+    {
+        var iid = await NewInstanceAsync("g10-mixed");
+        _ccEvents.Clear();
+
+        await ManualCcAsync(iid, "8701", "", "  ", "8702");
+
+        Assert.Equal(new List<string> { "8701", "8702" }, await _repo.FindCcActorIdsAsync(iid));
+        Assert.Equal(2, await CcRowCountAsync(iid));                                     // 库里只有两行
+        Assert.Equal(new List<string> { "8701", "8702" }, CcActorIdsOfEvents());          // fire 入参只含有效的人
+    }
+
+    /// <summary>
+    /// 写侧兜底：绕过引擎/门面直连仓储时，空串／纯空白／<c>null</c> 同样建不出行。
+    /// 只修漏斗不修写侧 ⇒ 第三方直投就还能灌空值——本条钉两层里的第二层（SQL 侧）。
+    /// </summary>
+    [Fact]
+    public async Task RepoWritePathAlsoDropsBlankActors()
+    {
+        var iid = await NewInstanceAsync("g10-repo-write");
+
+        await _repo.CreateCcInstanceAsync(iid, "zhangsan",
+            new string?[] { "", "   ", null, "8801" }.Select(x => x!).ToArray());
+
+        Assert.Equal(new List<string> { "8801" }, await _repo.FindCcActorIdsAsync(iid));   // 空串/纯空白/null 都不建行
+        Assert.Equal(1, await CcRowCountAsync(iid));                                        // 只落那一行
+    }
+
+    /// <summary>
+    /// 落库值取 trim 后的串：<c>" 8901 "</c> 与 "8901" 是同一个人
+    /// （与 G2 写侧判重咬合，不 trim ⇒ 同一人落两行）。
+    /// </summary>
+    [Fact]
+    public async Task CcActorValueIsTrimmedAndHitsTheDedupRule()
+    {
+        var iid = await NewInstanceAsync("g10-trim");
+        await _repo.CreateCcInstanceAsync(iid, "zhangsan", " 8901 ");
+        Assert.Equal(new List<string> { "8901" }, await _repo.FindCcActorIdsAsync(iid));   // 入库值应是 trim 后的串
+
+        _ccEvents.Clear();
+        Tick();
+        await ManualCcAsync(iid, "8901");
+
+        Assert.Equal(1, await CcRowCountAsync(iid));     // G10：带空格与不带空格判为同一人 ⇒ 不新增行
+        Assert.Empty(_ccEvents);                          // G10：判重命中 ⇒ 不 fire 码 4
+    }
+
+    /// <summary>
+    /// SPI 接口默认实现档（本仓未覆写 <c>CreateCcInstanceIfAbsentAsync</c> ⇒ 打的就是这一支）：
+    /// 返回的子集也不得含空值——子集直接拿去 fire 码 4。
+    /// </summary>
+    [Fact]
+    public async Task IfAbsentSubsetExcludesBlankActors()
+    {
+        var iid = await NewInstanceAsync("g10-subset");
+        IProcessRepository spi = _repo;
+
+        var created = await spi.CreateCcInstanceIfAbsentAsync(iid, "zhangsan",
+            new string?[] { "", "8951", "  ", " 8952 " }.Select(x => x!).ToArray());
+
+        Assert.Equal(new List<string> { "8951", "8952" }, created);                        // 子集只含有效且 trim 后的人
+        Assert.Equal(new List<string> { "8951", "8952" }, await _repo.FindCcActorIdsAsync(iid));
+        Assert.Equal(2, await CcRowCountAsync(iid));                                       // 子集与库里真行一致
+    }
+
+    /// <summary>反向哨兵（spec §2.10 要求④）：判据只吃空值，不吃 <c>"0"</c> 这类"看起来像空"的正常 id。</summary>
+    [Fact]
+    public async Task NormalActorIdsAreNotMistakenForBlank()
+    {
+        var iid = await NewInstanceAsync("g10-sentinel");
+        _ccEvents.Clear();
+
+        await ManualCcAsync(iid, "0", "user-1");
+
+        Assert.Equal(new List<string> { "0", "user-1" }, await _repo.FindCcActorIdsAsync(iid));   // "0" 不得被吃掉
+        Assert.Equal(2, await CcRowCountAsync(iid));
+        Assert.Equal(2, _ccEvents.Count);                                                          // 照旧逐人 fire
+    }
 }

@@ -487,11 +487,18 @@ public class JeeflowEngine
                 if (o != null)
                     ccArr.Add(o.ToString()!);
         }
-        if (ccArr is { Count: > 0 })
+        if (ccArr != null)
         {
+            // issues/141 G10「空不创建行」（spec 06 §2.10）：逗号串与数组两种形态共用同一条归一腿——
+            // 空串/纯空白/数组里的空元素一律丢弃，落库与比较取 trim 后的值；丢完为空 ⇒ 不建 cc 行、
+            // 也不 fire 码 4。本栈旧形状与 java 同款：<c"".Split(',')</c> 得到<b>一个空元素</b>
+            // ⇒ 实测落出一条 ActorId='' 的 cc 行并 fire 一次码 4（issues/129 那族"空归属值"的病根）。
+            // 归一只放在漏斗这一层不够，写侧（两仓 + SPI 默认实现）还各有一层兜底。
+            var actors = PageQuery.NormalizeCcActors(ccArr);
+            if (actors.Count == 0) return;
             // issues/141 G2 写侧判重＝幂等空操作（spec 06 §4）：同一 (实例, 被抄送人) 已有 cc 行时
             // 跳过——不新增行、不重置未读、不更新原行时间；拿回的“实际新建子集”才拿去 fire。
-            var created = await Repository.CreateCcInstanceIfAbsentAsync(instanceId, op ?? "user1", ccArr.ToArray());
+            var created = await Repository.CreateCcInstanceIfAbsentAsync(instanceId, op ?? "user1", actors.ToArray());
             // CC_CREATE（issues/102）：cc 行落库之后逐抄送人 fire，ccActorId 直传事件体
             // 入参＝实际新建的子集而不是原始 ccArr（issues/141 G2）：spec §11.2 原则 1「码=事实」
             // ⇒ 重复抄送没发生“创建”，就不该发这个事件；子集为空整支不 fire（不空转、也不照旧全量 fire）。

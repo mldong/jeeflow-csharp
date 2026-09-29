@@ -42,6 +42,17 @@ Task<List<string>> CreateCcInstanceIfAbsentAsync(long instanceId, string creator
 > 判重与"子集才 fire"都吃不到**（默认实现读侧恒空集＝每次照旧全量插入），本方法为接口默认实现，
 > 不改既有集成方源码也能编译。
 
+> **空抄送人不建 cc 行**（G10 · spec 06 §2.10）：三条入口解析抄送人集合时，**空串、纯空白、
+> 数组里的空元素一律丢弃，落库与比较的值取 `Trim` 后的串**；丢完为空 ⇒ 不建任何 cc 行、
+> 也**不 fire CC_CREATE（码 4）**，手动腿此时与"空集合"同档（`actorIds 缺失` 错误信封，
+> 不是新错误码）。判据单点＝`PageQuery.NormalizeCcActors`，**两层都挡**：
+> ① 漏斗层＝引擎 `HandleCcActorsAsync` ＋门面 `createCCInstance`；
+> ② 写侧层＝`CreateCcInstanceAsync` 的实现义务（自带两仓已按它实现）＋ 接口默认实现
+> `CreateCcInstanceIfAbsentAsync`。集成方自实现仓储时**必须自己在最底层写入口丢空值并 trim**——
+> 只修漏斗的话，绕过引擎/门面直连仓储的调用方照样能把空归属值灌进 `actor_id`
+> （issues/129 那族"空 operator 读全库"的病根）。`"".Split(',')` 在 C# 与 Java 一样得到
+> **一个空元素**而不是零个，所以逗号串那条腿也必须过归一，别只判 `Length > 0`。
+
 ## 用户 SPI
 
 | SPI | 方法 | 说明 |

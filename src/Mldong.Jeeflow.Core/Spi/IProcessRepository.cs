@@ -33,6 +33,15 @@ public interface IProcessRepository
     Task<List<ProcessTask>> FindDoneTasksAsync(long instanceId, string[]? taskNames);
     Task<List<ProcessTask>> FindHistoryTasksAsync(long instanceId);
 
+    /// <summary>
+    /// 建 cc 行的最底层写入口（<c>wf_process_cc_instance</c>）。
+    /// <para><b>issues/141 G10「空不创建行」（spec 06 §2.10）的实现义务</b>：入参里的
+    /// <b>空串、纯空白、<c>null</c> 一律丢弃</b>，落库值取 <c>Trim</c> 后的串
+    /// （<c>" 123 "</c> 与 <c>"123"</c> 是同一个人）。判据要落在这一层而不只落在引擎漏斗里——
+    /// 绕过 <c>HandleCcActorsAsync</c>／门面直连仓储的调用方（集成层、第三方仓储消费者）同样不得
+    /// 把空归属值灌进 <c>actor_id</c>，那正是 issues/129 那族"空 operator 读全库"的病根。
+    /// 本栈自带的两仓（内存 / MySQL）都按 <see cref="PageQuery.NormalizeCcActors"/> 实现这条义务。</para>
+    /// </summary>
     Task CreateCcInstanceAsync(long instanceId, string creator, params string[] actorIds);
     Task UpdateCcStatusAsync(long instanceId, string actorId);
 
@@ -65,9 +74,11 @@ public interface IProcessRepository
     {
         var existing = await FindCcActorIdsAsync(instanceId);
         var fresh = new List<string>();
-        foreach (var actorId in actorIds ?? Array.Empty<string>())
+        // issues/141 G10「空不创建行」（spec 06 §2.10）：先过同一条归一腿——空串/纯空白/null 丢弃，
+        // 值取 trim 后的串（" 123 " 与 "123" 是同一个人，也才与上面的判重咬合）。返回的子集直接
+        // 拿去 fire CC_CREATE（码 4），所以子集里也不能留空值（旧形状实测会把 ""/"  " 原样返回并 fire）。
+        foreach (var actorId in PageQuery.NormalizeCcActors(actorIds))
         {
-            if (actorId == null) continue;
             if (existing.Contains(actorId)) continue;
             if (!fresh.Contains(actorId)) fresh.Add(actorId);
         }

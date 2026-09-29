@@ -362,9 +362,14 @@ public class MySqlRepository : IProcessRepository
         // DISTINCT（owner 2026-09-29 拍），历史重复行也不清理。
         var existing = await FindCcActorIdsInternalAsync(lease.Conn, instanceId);
         var now = ToDb(Clock.Now);
-        foreach (var actorId in actorIds)
+        // issues/141 G10「空不创建行」（spec 06 §2.10）写侧兜底：与内存仓同一条判据（共用
+        // PageQuery.NormalizeCcActors）——空串/纯空白/null 一律丢弃，落库值取 trim 后的串。
+        // 绕过引擎漏斗／门面直连仓储的调用方也建不出 actor_id='' 的行，且 " 123 " 与 "123"
+        // 判为同一人（与上面的写侧判重同一条尺子；旧形状实测 actorIds={"","   ",null,"8801"}
+        // 真落 3 行，其中两行的 actor_id 是 '' 与 '   '）。
+        foreach (var actorId in PageQuery.NormalizeCcActors(actorIds))
         {
-            if (actorId == null || existing.Contains(actorId)) continue;
+            if (existing.Contains(actorId)) continue;
             var id = IdGen.NextId();
             await ExecAsync(lease.Conn, sql, cmd =>
             {

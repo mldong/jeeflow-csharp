@@ -576,10 +576,16 @@ public partial class JeeflowFacade
         }
         var list = new List<string>();
         foreach (var o in coll) list.Add(o?.ToString() ?? "");
+        // issues/141 G10「空不创建行」（spec 06 §2.10）：手动腿与引擎腿走同一个归一函数
+        // （PageQuery.NormalizeCcActors，判据单点），空串/纯空白/空元素一律丢弃，值取 trim 后的串；
+        // 丢完为空 ⇒ 与上面那条"空集合＝actorIds 缺失"同档（沿用既有错误信封与文案，不新造错误语义）。
+        // 旧形状实测：actorIds={"", "   "} 时 code=0 且真落两行 cc（ActorId='' 与 '   '）、fire 码 4 两次。
+        var actors = PageQuery.NormalizeCcActors(list);
+        if (actors.Count == 0) return Error("actorIds 缺失");
         // issues/141 G2 写侧判重＝幂等空操作（spec 06 §4）：手动腿与引擎腿同一条判据
         // （spec §11.7「三条入口共用一支」）——已有 cc 行的 (实例, 人) 跳过，不新增行、
         // 不重置未读、不更新原行时间；只有实际新建的子集拿去 fire。
-        var created = await _repository.CreateCcInstanceIfAbsentAsync(instanceId!.Value, op, list.ToArray());
+        var created = await _repository.CreateCcInstanceIfAbsentAsync(instanceId!.Value, op, actors.ToArray());
         // CC_CREATE（码 4）：<b>手动抄送支也要 fire</b>——issues/132 §4.5 待拍① 按 spec §11.2 原则 1
         // 定稿：码值表达"发生了什么事实"（新增了一条抄送记录），不表达"谁触发的"，
         // 故引擎自动路径（f_ccActors／tf_ccActors）与门面手动路径共用同一个 fire 口

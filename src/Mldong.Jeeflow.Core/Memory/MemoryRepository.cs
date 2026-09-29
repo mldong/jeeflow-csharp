@@ -217,9 +217,13 @@ public class MemoryRepository : IProcessRepository
             .Select(c => c.ActorId!)
             .ToList();
         var now = Clock.Now;
-        foreach (var actorId in actorIds)
+        // issues/141 G10「空不创建行」（spec 06 §2.10）写侧兜底：与 MySqlRepository 同一条判据
+        // （共用 PageQuery.NormalizeCcActors，不在两仓各抄一份）——空串/纯空白/null 丢弃、
+        // 落库值取 trim 后的串。绕过引擎漏斗直连仓储的调用方也建不出 ActorId='' 的行，
+        // 且 " 123 " 与 "123" 判为同一人（与上面的写侧判重同一条尺子）。
+        foreach (var actorId in PageQuery.NormalizeCcActors(actorIds))
         {
-            if (actorId == null || existing.Contains(actorId)) continue;
+            if (existing.Contains(actorId)) continue;
             CcInstances[++_ccAutoId] = new CcRow
             {
                 Id = _ccAutoId,
