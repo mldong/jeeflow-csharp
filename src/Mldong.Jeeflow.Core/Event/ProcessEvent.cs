@@ -42,6 +42,9 @@ public static class ProcessPublisher
     /// （<c>processInstance/createCCInstance</c>）<b>共用这一个实现</b>——spec §11.2 原则 1
     /// 「同一事实只发一次，路径不进事件名」，issues/132 §4.5 待拍① 据此定为「手动支也要 fire」。
     /// 行为基准取 Java <c>JeeflowEngineImpl</c> 的单一 <c>notifyCcCreate</c>（spec §11.7）。</para>
+    /// <para><b>入参一律是“实际新建的 actor 子集”</b>（issues/141 G2 · spec 06 §4）：调用点先走
+    /// <see cref="IProcessRepository.CreateCcInstanceIfAbsentAsync"/> 拿到子集，子集为空整支不 fire——
+    /// §11.2 原则 1「码=事实」，重复抄送没发生“创建”就不该发码 4，严禁照旧按原始请求全量 fire。</para>
     /// </summary>
     public static async Task NotifyCcCreateAsync(
         long instanceId, IEnumerable<string> ccActorIds,

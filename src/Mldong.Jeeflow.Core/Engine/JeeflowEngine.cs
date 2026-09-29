@@ -489,9 +489,16 @@ public class JeeflowEngine
         }
         if (ccArr is { Count: > 0 })
         {
-            await Repository.CreateCcInstanceAsync(instanceId, op ?? "user1", ccArr.ToArray());
+            // issues/141 G2 写侧判重＝幂等空操作（spec 06 §4）：同一 (实例, 被抄送人) 已有 cc 行时
+            // 跳过——不新增行、不重置未读、不更新原行时间；拿回的“实际新建子集”才拿去 fire。
+            var created = await Repository.CreateCcInstanceIfAbsentAsync(instanceId, op ?? "user1", ccArr.ToArray());
             // CC_CREATE（issues/102）：cc 行落库之后逐抄送人 fire，ccActorId 直传事件体
-            await ProcessPublisher.NotifyCcCreateAsync(instanceId, ccArr, _context.EventListeners);
+            // 入参＝实际新建的子集而不是原始 ccArr（issues/141 G2）：spec §11.2 原则 1「码=事实」
+            // ⇒ 重复抄送没发生“创建”，就不该发这个事件；子集为空整支不 fire（不空转、也不照旧全量 fire）。
+            if (created.Count > 0)
+            {
+                await ProcessPublisher.NotifyCcCreateAsync(instanceId, created, _context.EventListeners);
+            }
         }
     }
 

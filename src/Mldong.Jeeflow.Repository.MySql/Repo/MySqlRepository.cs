@@ -356,9 +356,15 @@ public class MySqlRepository : IProcessRepository
         const string sql = "INSERT INTO wf_process_cc_instance " +
                            "(id, process_instance_id, actor_id, state, create_time, create_user, update_time, update_user) " +
                            "VALUES (?,?,?,0,?,?,?,?)";
+        // issues/141 G2 写侧判重＝幂等空操作（spec 06 §4）：同一 (实例, 被抄送人) 已有 cc 行时
+        // 直接跳过——不新增行、不重置未读（state 保持原值）、不更新原行时间（不碰 UPDATE，
+        // create_time/update_time 逐字不变）。判重放在写侧而不是查询侧：查询保持现状不引入
+        // DISTINCT（owner 2026-09-29 拍），历史重复行也不清理。
+        var existing = await FindCcActorIdsInternalAsync(lease.Conn, instanceId);
         var now = ToDb(Clock.Now);
         foreach (var actorId in actorIds)
         {
+            if (actorId == null || existing.Contains(actorId)) continue;
             var id = IdGen.NextId();
             await ExecAsync(lease.Conn, sql, cmd =>
             {
@@ -370,7 +376,34 @@ public class MySqlRepository : IProcessRepository
                 cmd.Parameters.Add(new MySqlParameter { Value = now });
                 cmd.Parameters.Add(new MySqlParameter { Value = creator });
             });
+            // 同一次调用内的重复也算“已存在”，只落一行
+            existing.Add(actorId);
         }
+    }
+
+    /// <summary>
+    /// issues/141 G2：某实例已有的 cc 行 actor id（写侧判重的读侧，SQL 仓读真实行，不靠内存猜测）。
+    /// 返回<b>可修改</b>的 List——<see cref="CreateCcInstanceAsync"/> 要在插入过程中往里追加。
+    /// </summary>
+    public virtual async Task<List<string>> FindCcActorIdsAsync(long instanceId)
+    {
+        await using var lease = await RentAsync();
+        return await FindCcActorIdsInternalAsync(lease.Conn, instanceId);
+    }
+
+    private async Task<List<string>> FindCcActorIdsInternalAsync(MySqlConnection conn, long instanceId)
+    {
+        const string sql = "SELECT actor_id FROM wf_process_cc_instance WHERE process_instance_id = ? ORDER BY id ASC";
+        var actorIds = new List<string>();
+        await using var cmd = NewCmd(sql, conn);
+        cmd.Parameters.Add(new MySqlParameter { Value = instanceId });
+        await using var rs = await cmd.ExecuteReaderAsync();
+        while (await rs.ReadAsync())
+        {
+            var s = GetStr(rs, "actor_id");
+            if (s != null) actorIds.Add(s);
+        }
+        return actorIds;
     }
 
     public virtual async Task UpdateCcStatusAsync(long instanceId, string actorId)
@@ -471,8 +504,21 @@ public class MySqlRepository : IProcessRepository
     public virtual Task<PageResult<IProcessRepository.InstanceRow>> PageInstancesAsync(PageQuery query) =>
         PageInstancesAsync(query, cc: false);
 
-    public virtual Task<PageResult<IProcessRepository.InstanceRow>> PageCcInstancesAsync(PageQuery query) =>
-        PageInstancesAsync(query, cc: true);
+    public virtual Task<PageResult<IProcessRepository.InstanceRow>> PageCcInstancesAsync(PageQuery query)
+    {
+        // issues/141 G1 归属条件必填（spec 06 §2.5「抄送分页同一条尺子」）：cc.actor_id 缺失或为空值
+        // ⇒ 空页。旧形状是 LEFT JOIN wf_process_cc_instance 不带条件时返回**全部实例**
+        // （php PDO 那面反面教材），而它自家内存仓只放“有 cc 行的实例”——同一栈两个仓储两个答案
+        // 正是 issues/117 场景 27 立过法的那一类，所以 SQL 仓与内存仓必须钉在同一条判据上
+        // （共用 PageQuery.HasEffectiveCondition，判据逐字同一条）。
+        // 空值档另由 PageQuery.OwnershipColumns（issues/129，BuildWhere 里）兜，这一格补的是“条件整条没给”。
+        if (!PageQuery.HasEffectiveCondition(query, "cc.actor_id"))
+        {
+            return Task.FromResult(PageResult<IProcessRepository.InstanceRow>.Of(
+                query.PageNum, query.PageSize, 0, new List<IProcessRepository.InstanceRow>()));
+        }
+        return PageInstancesAsync(query, cc: true);
+    }
 
     public virtual async Task<PageResult<IProcessRepository.DefineRow>> PageDefinesAsync(PageQuery query)
     {

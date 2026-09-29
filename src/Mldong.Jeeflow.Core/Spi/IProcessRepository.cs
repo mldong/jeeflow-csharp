@@ -36,6 +36,48 @@ public interface IProcessRepository
     Task CreateCcInstanceAsync(long instanceId, string creator, params string[] actorIds);
     Task UpdateCcStatusAsync(long instanceId, string actorId);
 
+    /// <summary>
+    /// issues/141 G2 写侧判重（spec 06 §4「抄送写侧判重＝幂等空操作」）的读侧：读某实例<b>已存在</b>
+    /// 的 cc 行 actor id，供建 cc 的三条入口（发起 <c>f_ccActors</c>／办理 <c>tf_ccActors</c>／
+    /// 门面手动 <c>createCCInstance</c>）判重用。
+    /// <para>接口默认实现（DIM）返回空集＝不判重，未覆写的第三方仓储维持旧行为（全量建行、
+    /// 全量 fire），SPI 源码兼容不破。jeeflow 自带的两仓（内存仓储 / MySQL 仓储）<b>必须</b>覆写：
+    /// 否则 issues/141 G1 那条「同一栈 SQL 仓与内存仓两个答案」的分叉在写侧重演一遍。</para>
+    /// </summary>
+    Task<List<string>> FindCcActorIdsAsync(long instanceId) =>
+        Task.FromResult(new List<string>());
+
+    /// <summary>
+    /// issues/141 G2：写侧幂等建 cc 行。同一 <c>(instanceId, actorId)</c> 已有 cc 行时<b>跳过</b>——
+    /// ①不新增行、②不重置未读状态（<c>state</c>）、③不更新原行时间，重复抄送同一个人
+    /// 在数据面上是 no-op（owner 2026-09-29 明确「不需要重置」，不产生“再提醒一次”语义）；
+    /// 返回<b>实际新建</b>的 actor 子集（顺序与入参一致，同一次调用内的重复也折叠）。
+    /// <para>为什么要返回子集而不是 void：spec 11.2 原则 1「码值表达发生了什么事实」⇒
+    /// 没发生“创建”就不得 fire <c>CC_CREATE</c>（码 4）。三条入口逐人 fire 的入参一律换成这个子集，
+    /// 子集为空则整支不 fire（见 <see cref="ProcessPublisher.NotifyCcCreateAsync"/> 的两个调用点）。</para>
+    /// <para>未覆写 <see cref="FindCcActorIdsAsync"/> 的第三方仓储走本默认实现 ⇒ 读侧恒空集，
+    /// 每次照旧把入参插进去（只折叠同一次调用内的重复），与旧 <see cref="CreateCcInstanceAsync"/>
+    /// 一样"全量插入、全量返回"——源码兼容不破，但跨调用的判重与"子集才 fire"都吃不到；
+    /// 自带两仓都已覆写，集成方自实现仓储要拿到本档语义也必须覆写。</para>
+    /// </summary>
+    async Task<List<string>> CreateCcInstanceIfAbsentAsync(
+        long instanceId, string creator, params string[] actorIds)
+    {
+        var existing = await FindCcActorIdsAsync(instanceId);
+        var fresh = new List<string>();
+        foreach (var actorId in actorIds ?? Array.Empty<string>())
+        {
+            if (actorId == null) continue;
+            if (existing.Contains(actorId)) continue;
+            if (!fresh.Contains(actorId)) fresh.Add(actorId);
+        }
+        if (fresh.Count > 0)
+        {
+            await CreateCcInstanceAsync(instanceId, creator, fresh.ToArray());
+        }
+        return fresh;
+    }
+
     Task<List<string>> FindTaskActorsAsync(long taskId);
     Task AddTaskActorAsync(long taskId, List<string> actors);
     Task RemoveTaskActorAsync(long taskId, List<string> actors);
@@ -48,7 +90,17 @@ public interface IProcessRepository
     Task<PageResult<TaskRow>> PageDoneTasksAsync(PageQuery query);
     /// <summary>我发起的流程实例。</summary>
     Task<PageResult<InstanceRow>> PageInstancesAsync(PageQuery query);
-    /// <summary>我的抄送。</summary>
+    /// <summary>
+    /// 我的抄送。
+    /// <para><b>归属条件必填</b>（issues/141 G1 · spec 06 §2.5）：查询必须带 <c>cc.actor_id</c> 的
+    /// 有效归属条件（判据＝<see cref="PageQuery.HasEffectiveCondition"/>：值非 null、字符串非全空白、
+    /// 集合非空）；<b>条件缺失或为空值时返回空页</b>（<c>recordCount=0, rows=[]</c>），
+    /// 严禁退化成“这条条件不加”而返回全部实例。<b>非归属列</b>的空值仍按“没填”忽略
+    /// （<c>m_LIKE_*</c> 传空串照旧放行，issues/129 同一条边界）。</para>
+    /// <para>SQL 仓储与内存仓储在同一条判据上必须给同一个答案（issues/117 场景 27 那把尺子
+    /// 扩到 ccList）；门面 <c>processInstance/ccList</c> 恒挂这条条件，这里防的是绕过门面
+    /// 直连仓储的调用方。</para>
+    /// </summary>
     Task<PageResult<InstanceRow>> PageCcInstancesAsync(PageQuery query);
     /// <summary>流程定义分页。</summary>
     Task<PageResult<DefineRow>> PageDefinesAsync(PageQuery query);

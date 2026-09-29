@@ -3,4 +3,10 @@
   <PropertyGroup>
     <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- 测试取证用：issues/141 G2 的②③档（重复抄送不重置未读、不刷原行时间）必须读内存仓储的
+         cc 行本体（CcInstances/CcRow.State/CreateTime/UpdateTime），而这一存储是 internal——
+         公开 API 面不因此扩一个 ForTest 方法（对齐 java 侧 ccRowsForTest 的取证强度，形状取本栈惯例）。 -->
+    <InternalsVisibleTo Include="Mldong.Jeeflow.Tests" />
+  </ItemGroup>
 </Project>

@@ -174,7 +174,9 @@ public class EventCodes132Tests
             e => Assert.Equal(iid, e.SourceId!.Value));
         // 探针：每一次 CcCreate 回调里，三条 cc 行都已可反查（fire 在 createCcInstance 之后）
         Assert.Empty(probe.Failures);
-        var page = await repo.PageCcInstancesAsync(new PageQuery(1, 10));
+        // 读法带归属条件（issues/141 G1：零条件 ⇒ 空页），断言一字未改
+        var page = await repo.PageCcInstancesAsync(new PageQuery(1, 10)
+            .Add("cc.actor_id", "IN", new List<string> { "ccA", "ccB", "ccC" }));
         Assert.Equal(3, page.RecordCount);
     }
 
@@ -200,7 +202,9 @@ public class EventCodes132Tests
         Assert.All(probe.Events.Where(e => e.EventType == ProcessEventType.CcCreate),
             e => Assert.Equal(iid, e.SourceId!.Value));
         Assert.Empty(probe.Failures);
-        Assert.Equal(2, (await repo.PageCcInstancesAsync(new PageQuery(1, 10))).RecordCount);
+        // 读法带归属条件（issues/141 G1：零条件 ⇒ 空页），断言一字未改
+        Assert.Equal(2, (await repo.PageCcInstancesAsync(new PageQuery(1, 10)
+            .Add("cc.actor_id", "IN", new List<string> { "m1", "m2" }))).RecordCount);
 
         // 负向不补发：actorIds 缺失／空集合 ⇒ 一行不建、一个事件不发（§11.2 原则 3 的另一面）
         var before = probe.Events.Count(e => e.EventType == ProcessEventType.CcCreate);
@@ -418,7 +422,9 @@ public class EventCodes132Tests
         // 主流程没被监听器的异常带跑：办结成功、实例落 20、cc 行落库
         Assert.True(Equals(0, resp["code"]), $"监听器抛异常不得回滚主流程: {resp["msg"]}");
         Assert.Equal((int)WfInstanceState.Finished, (await repo.FindInstanceByIdAsync(iid))!.State);
-        Assert.Equal(1, (await repo.PageCcInstancesAsync(new PageQuery(1, 10))).RecordCount);
+        // 读法带归属条件（issues/141 G1：零条件 ⇒ 空页），断言一字未改
+        Assert.Equal(1, (await repo.PageCcInstancesAsync(new PageQuery(1, 10)
+            .Add("cc.actor_id", "EQ", "u1"))).RecordCount);
         // 后续监听器一个不漏，两个监听器收到的序列完全相同（同栈内有序）。
         // CcCreate 排在最前是既有发起路形状：StartInTxAsync 第 7 步建 cc 行并 fire，第 8 步才跑开始节点
         // ——两条都各自满足"落库之后才 fire"（cc 行 insert 后、实例行 insert 后），spec 未钉跨支次序。
@@ -534,7 +540,10 @@ public class EventCodes132Tests
                     case ProcessEventType.CcCreate:
                     {
                         CcActorIds.Add(@event.CcActorId ?? "");
-                        var page = await _repo.PageCcInstancesAsync(new PageQuery(1, 10));
+                        // 读法带归属条件（issues/141 G1：零条件 ⇒ 空页），断言语义一字未改；
+                        // 按本支事件自己的 ccActorId 反查，反而比原来的"任意 cc 行存在"更严。
+                        var page = await _repo.PageCcInstancesAsync(
+                            new PageQuery(1, 10).Add("cc.actor_id", "EQ", @event.CcActorId));
                         Fail(page.RecordCount > 0, "cc 行未落库就 fire CC_CREATE");
                         break;
                     }

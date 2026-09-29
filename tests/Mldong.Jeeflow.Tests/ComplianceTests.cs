@@ -143,7 +143,12 @@ public class ComplianceTests
         Assert.All(fired, f => Assert.Equal(inst.InstanceId, f.SourceId));
         Assert.Equal("u1", fired[0].CcActorId);
         Assert.Equal("u2", fired[1].CcActorId);
-        var page = await repo.PageCcInstancesAsync(new PageQuery(1, 10));
+        // ⚠️ 这里**必须带归属条件**（issues/141 G1 · spec 06 §2.5）：PageCcInstances 在 cc.actor_id
+        // 无有效条件时按契约返回空页。本格原先零条件读回，等于把"不带条件也返行"这个正被 G1
+        // 关掉的非法形状当成了依赖——断言（cc 行确实逐人建了）一字未改，只把读法换成合法形状
+        // （IN 给两个被抄送人＝有效归属条件，命中集与旧零条件读完全相同）。
+        var page = await repo.PageCcInstancesAsync(new PageQuery(1, 10)
+            .Add("cc.actor_id", "IN", new List<string> { "u1", "u2" }));
         Assert.Equal(2, page.RecordCount);
     }
 
@@ -154,7 +159,8 @@ public class ComplianceTests
         var did = await TestInfra.SaveFlowDefineAsync(repo, "test-flow", SimpleFlow);
         var args = new FlowData { [FlowConst.CcActorsStart] = new List<object?> { "u9" } };
         var inst = await engine.StartProcessInstanceByIdAsync(did, "user1", args);
-        var page = await repo.PageCcInstancesAsync(new PageQuery(1, 10));
+        // 读法带归属条件（issues/141 G1：零条件 ⇒ 空页），断言一字未改
+        var page = await repo.PageCcInstancesAsync(new PageQuery(1, 10).Add("cc.actor_id", "EQ", "u9"));
         Assert.Equal(1, page.RecordCount);
         Assert.True(inst.InstanceId > 0);
     }
@@ -507,7 +513,9 @@ public class ComplianceTests
         var did = await TestInfra.SaveFlowDefineAsync(repo, "simple-cc", TestInfra.LoadFlow("01-simple"));
         var iid = await TestInfra.StartAndApplyAsync(engine, repo, did);
         await repo.CreateCcInstanceAsync(iid, "user1", "cc_user1", "cc_user2");
-        var page = await repo.PageCcInstancesAsync(new PageQuery(1, 10));
+        // 读法带归属条件（issues/141 G1：零条件 ⇒ 空页），断言一字未改
+        var page = await repo.PageCcInstancesAsync(new PageQuery(1, 10)
+            .Add("cc.actor_id", "IN", new List<string> { "cc_user1", "cc_user2" }));
         Assert.True(page.RecordCount > 0);
         // updateCcStatus：已读
         await repo.UpdateCcStatusAsync(iid, "cc_user1");

@@ -95,7 +95,7 @@ public class ExpireTime126Tests
         var clock = new FixedClock(new DateTime(2026, 8, 1, 9, 0, 0));
         Assert.Null(Instance().CreateTask(Node("approve", "not-a-time"), "审批", One(), "op", 0, true, clock)
             .ExpireTime);
-        // 与 Java 的故意差异：Java 在 Integer.parseInt("x") 上抛异常打断建单，本栈落穿 → NULL
+        // 八栈一致（issues/137 C，java 6bdf41b 已对齐）：误配相对档前缀非整数 ⇒ 落穿到绝对档 ⇒ NULL，不抛错
         Assert.Null(Instance().CreateTask(Node("approve", "xh"), "审批", One(), "op", 0, true, clock)
             .ExpireTime);
     }

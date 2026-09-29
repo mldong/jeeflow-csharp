@@ -576,13 +576,20 @@ public partial class JeeflowFacade
         }
         var list = new List<string>();
         foreach (var o in coll) list.Add(o?.ToString() ?? "");
-        await _repository.CreateCcInstanceAsync(instanceId!.Value, op, list.ToArray());
+        // issues/141 G2 写侧判重＝幂等空操作（spec 06 §4）：手动腿与引擎腿同一条判据
+        // （spec §11.7「三条入口共用一支」）——已有 cc 行的 (实例, 人) 跳过，不新增行、
+        // 不重置未读、不更新原行时间；只有实际新建的子集拿去 fire。
+        var created = await _repository.CreateCcInstanceIfAbsentAsync(instanceId!.Value, op, list.ToArray());
         // CC_CREATE（码 4）：<b>手动抄送支也要 fire</b>——issues/132 §4.5 待拍① 按 spec §11.2 原则 1
         // 定稿：码值表达"发生了什么事实"（新增了一条抄送记录），不表达"谁触发的"，
         // 故引擎自动路径（f_ccActors／tf_ccActors）与门面手动路径共用同一个 fire 口
         // ProcessPublisher.NotifyCcCreateAsync（行为基准＝Java 单一 notifyCcCreate，spec §11.7）。
         // 集成层严禁再自行补发（§11.1，历史 PHP issues/101 就是这条降级路）。
-        await ProcessPublisher.NotifyCcCreateAsync(instanceId.Value, list, _context.EventListeners);
+        // 入参＝实际新建子集（issues/141 G2）：重复抄送没发生"创建"⇒ 不发码 4，子集为空整支不 fire。
+        if (created.Count > 0)
+        {
+            await ProcessPublisher.NotifyCcCreateAsync(instanceId.Value, created, _context.EventListeners);
+        }
         return Ok();
     }
 

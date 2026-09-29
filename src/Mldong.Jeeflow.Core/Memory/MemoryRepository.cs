@@ -209,9 +209,17 @@ public class MemoryRepository : IProcessRepository
 
     public virtual Task CreateCcInstanceAsync(long instanceId, string creator, params string[] actorIds)
     {
+        // issues/141 G2 写侧判重＝幂等空操作（spec 06 §4），与 MySqlRepository 同一条判据：
+        // 同一 (实例, 被抄送人) 已有 cc 行 ⇒ 跳过——不新增行、不重置未读（State 保持原值）、
+        // 不更新原行时间（CreateTime/UpdateTime 逐字不变）。判重在写侧，查询侧不引入去重。
+        var existing = CcInstances.Values
+            .Where(c => c.ProcessInstanceId == instanceId && c.ActorId != null)
+            .Select(c => c.ActorId!)
+            .ToList();
         var now = Clock.Now;
         foreach (var actorId in actorIds)
         {
+            if (actorId == null || existing.Contains(actorId)) continue;
             CcInstances[++_ccAutoId] = new CcRow
             {
                 Id = _ccAutoId,
@@ -223,9 +231,24 @@ public class MemoryRepository : IProcessRepository
                 UpdateTime = now,
                 UpdateUser = creator,
             };
+            // 同一次调用内的重复也算“已存在”，只落一行
+            existing.Add(actorId);
         }
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// issues/141 G2：某实例已有的 cc 行 actor id（写侧判重的读侧，顺序＝建行序）。
+    /// 内存仓的 cc 行带 State/CreateTime/UpdateTime（形状对齐 wf_process_cc_instance 表），
+    /// 判重只看 actor id 集合——②不重置未读、③不刷原行时间由 <c>CreateCcInstanceAsync</c>
+    /// 的“跳过而非改写”保证，不在这条读侧里。
+    /// </summary>
+    public virtual Task<List<string>> FindCcActorIdsAsync(long instanceId) =>
+        Task.FromResult(CcInstances.Values
+            .Where(c => c.ProcessInstanceId == instanceId && c.ActorId != null)
+            .OrderBy(c => c.Id)
+            .Select(c => c.ActorId!)
+            .ToList());
 
     public virtual Task UpdateCcStatusAsync(long instanceId, string actorId)
     {
@@ -310,8 +333,21 @@ public class MemoryRepository : IProcessRepository
     public virtual Task<PageResult<IProcessRepository.InstanceRow>> PageInstancesAsync(PageQuery query) =>
         Task.FromResult(PageInstances(query, cc: false));
 
-    public virtual Task<PageResult<IProcessRepository.InstanceRow>> PageCcInstancesAsync(PageQuery query) =>
-        Task.FromResult(PageInstances(query, cc: true));
+    public virtual Task<PageResult<IProcessRepository.InstanceRow>> PageCcInstancesAsync(PageQuery query)
+    {
+        // issues/141 G1 归属条件必填（spec 06 §2.5）：cc.actor_id 缺失或为空值 ⇒ 空页。
+        // 判据与 MySqlRepository.PageCcInstancesAsync 逐字同一条（共用 PageQuery.HasEffectiveCondition）
+        // ——旧形状是本仓只放“有 cc 行的实例”、MySQL 仓的 LEFT JOIN 不带条件时返全部实例，
+        // 同一栈两个仓储两个答案正是 issues/117 场景 27 立过法的那一类。
+        // 空值档另由 PageQuery.OwnershipColumns（issues/129）在 ApplyConditions 里兜，
+        // 这一格补的是“条件整条没给”。
+        if (!PageQuery.HasEffectiveCondition(query, "cc.actor_id"))
+        {
+            return Task.FromResult(PageResult<IProcessRepository.InstanceRow>.Of(
+                query.PageNum, query.PageSize, 0, new List<IProcessRepository.InstanceRow>()));
+        }
+        return Task.FromResult(PageInstances(query, cc: true));
+    }
 
     public virtual Task<PageResult<IProcessRepository.DefineRow>> PageDefinesAsync(PageQuery query) =>
         Task.FromResult(PageDefines(query));
