@@ -224,6 +224,11 @@ public class CustomHistoryRow142Tests
         Assert.Equal("通知外部系统", row.DisplayName);
         Assert.Equal(new List<string> { "applicant" }, row.ActorIds);       // 参与者＝当前操作人（留痕主体）
         Assert.Null(row.ExpireTime);                                        // 见类头 ExpireTime 结论
+        // spec 02 §6.2 第 1bis 条（八栈对表补的细则）：留痕行必须写处理人与完成时间——
+        // doneList 走 `state<>10 AND operator=?`、审批记录也读这两列，
+        // 只写 task_state=20 的留痕在用户面上等于没落过。
+        Assert.Equal("applicant", row.ActorId);
+        Assert.NotNull(row.FinishTime);
     }
 
     /// <summary>

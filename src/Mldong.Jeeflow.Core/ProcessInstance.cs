@@ -310,9 +310,20 @@ public class ProcessInstance
     {
         var task = ProcessTask.Create(
             InstanceId, customModel.Name, customModel.DisplayName,
-            null, null, null, new List<string> { op ?? "" }, op,
+            null, null, null,
+            // 参与者＝当前操作人（留痕主体，不是待办收单人）。op 为空时给**空集合**而不是 `[""]`——
+            // 往 actor_id 灌空串正是 issues/129／142 B 表那族"空归属值读全库"的进水口。
+            op is null or { Length: 0 } ? new List<string>() : new List<string> { op }, op,
             parentTaskId, isFirstTaskNode, clock);
         task.TaskState = (int)WfTaskState.Finished;
+        // spec 02 §6.2 第 1bis 条（issues/142 A 批收口，八栈对表判掉的分歧）：
+        // 这条 DONE 行必须写 `operator`（落库时绑的是 ActorId）与 `FinishTime`——
+        // doneList 走 `state<>10 AND operator=?`、审批记录也按这两列取数，
+        // 只写 task_state=20 的留痕在用户面上等于没落过（与第 1 条"查不到的留痕＝没留痕"同一把尺子）。
+        // 反过来 ExpireTime 保持 null：CustomModel 只有 clazz/methodName/args/val 四个属性，
+        // 记录类没有到期表达式可算，补它就是造默认值（issues/126 owner 口径"没配就留 NULL"）。
+        task.ActorId = op;
+        task.FinishTime = (clock ?? SystemClock.Instance).Now;
         Tasks.Add(task);
         return task;
     }
