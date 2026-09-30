@@ -40,9 +40,21 @@ public interface IProcessRepository
     /// （<c>" 123 "</c> 与 <c>"123"</c> 是同一个人）。判据要落在这一层而不只落在引擎漏斗里——
     /// 绕过 <c>HandleCcActorsAsync</c>／门面直连仓储的调用方（集成层、第三方仓储消费者）同样不得
     /// 把空归属值灌进 <c>actor_id</c>，那正是 issues/129 那族"空 operator 读全库"的病根。
-    /// 本栈自带的两仓（内存 / MySQL）都按 <see cref="PageQuery.NormalizeCcActors"/> 实现这条义务。</para>
+    /// 本栈自带的两仓（内存 / MySQL）都按 <c>PageQuery.NormalizeActors</c>（旧名
+    /// <see cref="PageQuery.NormalizeCcActors"/> 是它的转发）实现这条义务。</para>
     /// </summary>
     Task CreateCcInstanceAsync(long instanceId, string creator, params string[] actorIds);
+
+    /// <summary>
+    /// 抄送已读状态更新（<c>updateCCStatus</c> 的写入口）。
+    /// <para><b>issues/142 B 批 · spec 06 §2.11「SPI 注释义务」</b>：§2.11 点名各栈把空值义务
+    /// 只写在 <c>create_cc_instance</c> 上、其余声明是裸的 ⇒ 第三方照注释实现必然漏任务侧。
+    /// 这里的义务与 cc 写侧同一枚尺子：<b><c>actorId</c> 入参要先归一（trim、空串/纯空白/null
+    /// 视作"没填"）再比较</b>——带空格的 operator 会静默打不中任何行，而空值 operator 在某些
+    /// 实现里会把 <c>state=1</c> 打到历史 <c>actor_id=''</c> 的脏行上（issues/129 那族）。
+    /// 自带两仓的 SQL/内存实现都是等值比较，归一落在门面腿
+    /// （<c>JeeflowFacade.OperatorArg</c> 已 trim＋空值回落缺省）。</para>
+    /// </summary>
     Task UpdateCcStatusAsync(long instanceId, string actorId);
 
     /// <summary>
@@ -77,7 +89,7 @@ public interface IProcessRepository
         // issues/141 G10「空不创建行」（spec 06 §2.10）：先过同一条归一腿——空串/纯空白/null 丢弃，
         // 值取 trim 后的串（" 123 " 与 "123" 是同一个人，也才与上面的判重咬合）。返回的子集直接
         // 拿去 fire CC_CREATE（码 4），所以子集里也不能留空值（旧形状实测会把 ""/"  " 原样返回并 fire）。
-        foreach (var actorId in PageQuery.NormalizeCcActors(actorIds))
+        foreach (var actorId in PageQuery.NormalizeActors(actorIds))
         {
             if (existing.Contains(actorId)) continue;
             if (!fresh.Contains(actorId)) fresh.Add(actorId);
@@ -90,7 +102,37 @@ public interface IProcessRepository
     }
 
     Task<List<string>> FindTaskActorsAsync(long taskId);
+
+    /// <summary>
+    /// 任务参与者追加写入口（<c>wf_process_task_actor.actor_id</c>）。
+    /// <para><b>issues/142 B 批 · spec 06 §2.11「两仓 addTaskActor 写侧兜底」＋「SPI 注释义务」</b>：
+    /// §2.10 的四点实现要求逐字搬到任务侧——<c>actor_id</c> 是归属列，空串／纯空白／<c>null</c>
+    /// 一旦落进去就是 issues/129 那族"空归属值读全库"的进水口。实现方<b>必须</b>：
+    /// ① 入参先过归属值判据单点 <c>PageQuery.NormalizeActors</c>（与 <see cref="CreateCcInstanceAsync"/>
+    /// 同一枚，不另立尺子）：逐元素 trim、空串/纯空白/null 丢弃、同一次调用内的重复折叠；
+    /// ② <b>落库与判重都取 trim 后的值</b>（<c>" 123 "</c> 与 <c>"123"</c> 是同一个人，
+    /// 不 trim 就会与写侧判重错开、同一人落两行）；
+    /// ③ 判空只许 trim <b>后</b>判长，严禁 trim 前判长（<c>Where(t =&gt; t.Length &gt; 0)</c> 兜不住
+    /// <c>"  "</c>），也严禁语言自带的美值判据——<c>"0"</c>／<c>"00"</c>／<c>"a"</c> 是三张不同的脸，
+    /// 都不是空值（§2.11 要求④反向哨兵）；
+    /// ④ <b>主键类参数另判一档</b>：<c>taskId</c> 缺失/非正数（<c>0</c>／负数）必须响亮报错
+    /// （本栈两仓一律抛 <see cref="JeeflowException"/>，文案不带内部码），
+    /// 不得拿 <c>''</c>/<c>0</c> 当 id 落库——归属值可有可无，主键没有就是调用方写错了。
+    /// 只修门面/引擎那条腿不够：绕过门面直连仓储的集成层同样不得灌空值（要求①两层都挡）。
+    /// 本栈自带的两仓（内存 / MySQL）都按这一条实现，且在同一条判据上给同一个答案
+    /// （issues/117 场景 27 那把尺子）。</para>
+    /// </summary>
     Task AddTaskActorAsync(long taskId, List<string> actors);
+
+    /// <summary>
+    /// 任务参与者摘除（issues/142 §9.2 第二批 · spec 06 §2.11 删除位与写侧同一条尺子）。
+    /// <para>实现方必须：① 删除列表先过归属值判据单点 <c>PageQuery.NormalizeActors</c>
+    /// （与 <see cref="AddTaskActorAsync"/> 同一枚，不另立尺子）——存量行是 trim 后的值、
+    /// 入参带空格时按原样比会静默不中（转办"摘原人"那一腿就落在这种静默失败上，报成功却没删）；
+    /// ② <b>归一后为空 ⇒ 一条都不删</b>（早退）——空串入参在历史 <c>actor_id=''</c> 的脏行上
+    /// 会批量误删（issues/129 那族的删除位对偶）。本栈两仓都按这一条实现，
+    /// 且在同一条判据上给同一个答案（issues/117 场景 27 那把尺子）。</para>
+    /// </summary>
     Task RemoveTaskActorAsync(long taskId, List<string> actors);
 
     // ═══ 前端分页查询方法 ═══

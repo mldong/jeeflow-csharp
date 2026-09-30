@@ -218,10 +218,10 @@ public class MemoryRepository : IProcessRepository
             .ToList();
         var now = Clock.Now;
         // issues/141 G10「空不创建行」（spec 06 §2.10）写侧兜底：与 MySqlRepository 同一条判据
-        // （共用 PageQuery.NormalizeCcActors，不在两仓各抄一份）——空串/纯空白/null 丢弃、
+        // （共用 PageQuery.NormalizeActors，不在两仓各抄一份）——空串/纯空白/null 丢弃、
         // 落库值取 trim 后的串。绕过引擎漏斗直连仓储的调用方也建不出 ActorId='' 的行，
         // 且 " 123 " 与 "123" 判为同一人（与上面的写侧判重同一条尺子）。
-        foreach (var actorId in PageQuery.NormalizeCcActors(actorIds))
+        foreach (var actorId in PageQuery.NormalizeActors(actorIds))
         {
             if (existing.Contains(actorId)) continue;
             CcInstances[++_ccAutoId] = new CcRow
@@ -279,11 +279,22 @@ public class MemoryRepository : IProcessRepository
             .Select(a => a.ActorId ?? "")
             .ToList();
 
+    /// <summary>
+    /// 参与者追加（去重追加语义，对齐 JDBC addTaskActor：existing 差集插入）。
+    /// <para><b>issues/142 B 批 · spec 06 §2.11「两仓 addTaskActor 写侧兜底」</b>：入参先过归属值
+    /// 判据单点 <c>PageQuery.NormalizeActors</c>（与 cc 侧、门面腿同一枚），
+    /// 空串/纯空白/null 丢弃、<b>落库值取 trim 后的串</b>——绕过门面/引擎直连仓储的调用方
+    /// 也灌不进空归属值，且 <c>" 123 "</c> 与 <c>"123"</c> 判为同一个人（与下面的判重同一把尺子）。
+    /// 旧形状实测：<c>[" 16501 ","16501","","  ","0"]</c> ⇒ 内存里落 5 行。</para>
+    /// <para><b>主键另判一档</b>（§2.11）：<c>taskId</c> 缺失/非正数响亮报错，不得拿 <c>0</c> 当 id
+    /// 落孤儿行。与 MySQL 仓同一条判据、同一个答案（issues/117 场景 27 那把尺子）。</para>
+    /// </summary>
     public virtual Task AddTaskActorAsync(long taskId, List<string> actors)
     {
+        FlowUtil.RequireTaskId(taskId);
         // 去重追加语义（对齐 JDBC addTaskActor：existing 差集插入）
         var existing = FindTaskActorsInternal(taskId);
-        foreach (var actor in actors)
+        foreach (var actor in PageQuery.NormalizeActors(actors))
         {
             if (existing.Contains(actor)) continue;
             TaskActors[++_actorAutoId] = new ActorRow
@@ -298,10 +309,19 @@ public class MemoryRepository : IProcessRepository
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// 参与者删除（issues/142 §9.2 第二批 · spec 06 §2.11 同一把尺子搬到删除位）：
+    /// 删除列表先过归属值判据单点 <see cref="PageQuery.NormalizeActors"/>——
+    /// 不 trim 则「 8601 」删不掉库里 trim 后的 8601（静默 no-op 报成功）；
+    /// 归一后为空 ⇒ <b>什么都不删</b>（早退）——空串入参在历史 <c>actor_id=''</c> 脏行上
+    /// 会批量误删（issues/129 那族的删除位对偶）。与 MySQL 仓同一条判据、同一个答案。
+    /// </summary>
     public virtual Task RemoveTaskActorAsync(long taskId, List<string> actors)
     {
+        var toRemoveIds = PageQuery.NormalizeActors(actors);
+        if (toRemoveIds.Count == 0) return Task.CompletedTask;
         var toRemove = TaskActors.Values
-            .Where(a => a.ProcessTaskId == taskId && actors.Contains(a.ActorId ?? ""))
+            .Where(a => a.ProcessTaskId == taskId && toRemoveIds.Contains(a.ActorId ?? ""))
             .Select(a => a.Id)
             .ToList();
         foreach (var id in toRemove) TaskActors.Remove(id);

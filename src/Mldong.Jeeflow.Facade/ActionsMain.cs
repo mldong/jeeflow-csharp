@@ -49,8 +49,13 @@ public partial class JeeflowFacade
             await _repository.AddTaskActorAsync(task.TaskId!.Value, new List<string> { op });
             flowArgs[FlowConst.SubmitType] = (int)WfSubmitType.Apply;
             // f_nextNodeOperator（发起时预指派人）→ tf_nextNodeOperator（引擎执行参数）
-            var startNextOp = flowArgs.GetStr(FlowConst.ProcessStartNextNodeOperator);
-            if (!string.IsNullOrEmpty(startNextOp))
+            // issues/142 B 批 · spec 06 §2.11「两形同判据」：这里原先用 GetStr（＝value.ToString()）读值，
+            // 数组形态被整条串成 <b>.NET 类型名</b>当成一个参与者落进 actor_id——实机取证读数
+            // Expected ["17001","17002"] / Actual ["System.Collections.Generic.List`1[System.Object]"]。
+            // 现在过归属值判据单点（逗号串/数组/标量同一枚：逐元素 trim、空值丢弃、折叠、数字收敛成字符串），
+            // 归一后为空 ⇒ 与"没填"同档（不写 tf_nextNodeOperator，由引擎回落节点 assignee）。
+            var startNextOp = PageQuery.NormalizeActors(flowArgs.GetObj(FlowConst.ProcessStartNextNodeOperator));
+            if (startNextOp.Count > 0)
             {
                 flowArgs[FlowConst.NextNodeOperator] = startNextOp;
             }
@@ -426,25 +431,10 @@ public partial class JeeflowFacade
         {
             if (t.Variables == null) continue;
             if (!t.Variables.TryGetValue(key, out var value)) continue;
-            if (value is string)
-            {
-                // 标量：走 else 分支
-            }
-            else if (value is System.Collections.ICollection coll)
-            {
-                var list = new List<string>();
-                foreach (var o in coll)
-                {
-                    var s = o?.ToString()?.Trim();
-                    if (!string.IsNullOrEmpty(s)) list.Add(s);
-                }
-                if (list.Count > 0) return list;
-            }
-            else if (value != null)
-            {
-                var s = value.ToString()?.Trim();
-                if (!string.IsNullOrEmpty(s)) return new List<string> { s };
-            }
+            // issues/142 B 批：出口侧读这把名册也过同一枚判据单点（逗号串/数组/标量两形同判据、
+            // trim、空值丢弃、折叠），不再在本方法里判第三份尺子；整条为空时继续找下一个任务变量（旧语义）。
+            var actors = PageQuery.NormalizeActors(value);
+            if (actors.Count > 0) return actors;
         }
         return new List<string>();
     }
@@ -574,13 +564,12 @@ public partial class JeeflowFacade
         {
             return Error("actorIds 缺失");
         }
-        var list = new List<string>();
-        foreach (var o in coll) list.Add(o?.ToString() ?? "");
-        // issues/141 G10「空不创建行」（spec 06 §2.10）：手动腿与引擎腿走同一个归一函数
-        // （PageQuery.NormalizeCcActors，判据单点），空串/纯空白/空元素一律丢弃，值取 trim 后的串；
-        // 丢完为空 ⇒ 与上面那条"空集合＝actorIds 缺失"同档（沿用既有错误信封与文案，不新造错误语义）。
+        // issues/141 G10「空不创建行」（spec 06 §2.10）＋ issues/142 B 批（§2.11 同一枚尺子搬到任务侧）：
+        // 手动腿与引擎腿、任务侧走的是<b>同一个判据单点</b> PageQuery.NormalizeActors——
+        // 空串/纯空白/null 丢弃、值取 trim 后的串；丢完为空 ⇒ 与上面那条"空集合＝actorIds 缺失"
+        // 同档（沿用既有错误信封与文案，不新造错误语义）。
         // 旧形状实测：actorIds={"", "   "} 时 code=0 且真落两行 cc（ActorId='' 与 '   '）、fire 码 4 两次。
-        var actors = PageQuery.NormalizeCcActors(list);
+        var actors = PageQuery.NormalizeActors(actorIds);
         if (actors.Count == 0) return Error("actorIds 缺失");
         // issues/141 G2 写侧判重＝幂等空操作（spec 06 §4）：手动腿与引擎腿同一条判据
         // （spec §11.7「三条入口共用一支」）——已有 cc 行的 (实例, 人) 跳过，不新增行、
@@ -775,8 +764,16 @@ public partial class JeeflowFacade
     private async Task<Dictionary<string, object?>> TaskSurrogateAsync(FlowData args)
     {
         var taskId = ToLong(args.GetObj(FlowConst.ProcessTaskIdKey));
-        var actors = ToStringList(args.GetObj("actorIds"));
-        if (taskId == null || actors.Count == 0) return Error("processTaskId/actorIds 缺失");
+        // issues/142 B 批 · spec 06 §2.11：actorIds 的逗号串与数组两形过同一枚判据单点
+        // （PageQuery.NormalizeActors）——逐元素 trim、空串/纯空白/null 丢弃、同次调用折叠。
+        // 旧形状：集合腿不 trim，末尾 Where(t => t.Length > 0) 只兜住 null 转成的 ""，兜不住 "  "
+        //（trim 前长度 > 0）⇒ 实测加签 [" 16001 ","16001","","  ",null,"16002"] 落
+        // ["leader"," 16001 ","16001","  ","16002"]：同一人两行 + 一条空归属值。
+        var actors = PageQuery.NormalizeActors(args.GetObj("actorIds"));
+        // 主键类参数另判一档（§2.11）：缺失/空串/0/负数都是调用方写错了，不得拿 ''/0 当 id 落库；
+        // 沿用既有"缺参数"信封与文案（要求③不新造错误码/文案）。
+        if (taskId == null || taskId.Value <= 0 || actors.Count == 0)
+            return Error("processTaskId/actorIds 缺失");
         // C15/issues/28：addTaskActor=去重追加非全删全插
         await _repository.AddTaskActorAsync(taskId!.Value, actors);
         return Ok();
@@ -810,27 +807,31 @@ public partial class JeeflowFacade
     {
         var taskId = ToLong(args.GetObj(FlowConst.ProcessTaskIdKey));
         // 参数必填序与 msg 逐字对齐 spec 06「失败 msg 跨栈统一文案」（失败码一律 99999999）
-        var op = ToStr(args.GetObj("operator"))?.Trim();
-        if (string.IsNullOrEmpty(op)) return Error("operator 必填");
-        var fromActor = ToStr(args.GetObj("fromActor"))?.Trim();
-        if (string.IsNullOrEmpty(fromActor)) return Error("fromActor 必填");
-        var toActor = ToStr(args.GetObj("toActor"))?.Trim();
-        if (string.IsNullOrEmpty(toActor)) return Error("toActor 必填");
+        // issues/142 B 批 · spec 06 §2.11：fromActor/toActor/operator 先过归属值判据单点再用
+        // （NormalizeActorValue＝单人档：trim＋丢空，集合形态 ["x"] 收敛成那一个人）。
+        // 旧形状用 ToStr（＝value.ToString()）读单人参数，数组形态整条串成 .NET 类型名 ⇒
+        // 实测 fromActor=["leader"] 直接落进"原办理人不是该任务参与人"，拼错时还会把类型名写进 actor_id。
+        var op = PageQuery.NormalizeActorValue(args.GetObj("operator"));
+        if (op == null) return Error("operator 必填");
+        var fromActor = PageQuery.NormalizeActorValue(args.GetObj("fromActor"));
+        if (fromActor == null) return Error("fromActor 必填");
+        var toActor = PageQuery.NormalizeActorValue(args.GetObj("toActor"));
+        if (toActor == null) return Error("toActor 必填");
         var reason = ToStr(args.GetObj("reason")) ?? "";
         var task = taskId == null ? null : await _repository.FindTaskByIdAsync(taskId.Value);
         if (task == null) return Error("任务不存在");
         // 归属判据：只能转自己那一条待办（flow.auto / flow.admin 例外），与撤回同口径
-        if (!IsPrivilegedOperator(op!) && op != fromActor) return Error("无权限转办该任务");
+        if (!IsPrivilegedOperator(op) && op != fromActor) return Error("无权限转办该任务");
         // 前置态：仅进行中（DOING=10）任务可转办
         if (!task.IsDoing()) return Error("任务非进行中，不可转办");
         // 参与者以关系表为判据（聚合副本可能滞后于加签/转办的增量写入）；副本并入仅作仓储不水合时兜底
         var actors = await _repository.FindTaskActorsAsync(taskId!.Value);
         var participants = DedupKeepOrder(actors.Concat(task.ActorIds));
-        if (!participants.Contains(fromActor!)) return Error("原办理人不是该任务参与人");
-        if (participants.Contains(toActor!)) return Error("目标人已是该任务参与人");
+        if (!participants.Contains(fromActor)) return Error("原办理人不是该任务参与人");
+        if (participants.Contains(toActor)) return Error("目标人已是该任务参与人");
         // ① 摘原人（仅 fromActor 一行）+ ② 加新人（同一 taskId，不新建任务）
-        await _repository.RemoveTaskActorAsync(taskId.Value, new List<string> { fromActor! });
-        await _repository.AddTaskActorAsync(taskId.Value, new List<string> { toActor! });
+        await _repository.RemoveTaskActorAsync(taskId.Value, new List<string> { fromActor });
+        await _repository.AddTaskActorAsync(taskId.Value, new List<string> { toActor });
         // ④ 留痕三件（写进任务变量，与办理提交同一槽位）
         var vars = task.Variables ?? new FlowData();
         var now = Clock.Now;

@@ -273,7 +273,7 @@
           "action": "processTask/surrogate",
           "method": "taskSurrogate",
           "permission": "wf:processTask:surrogate",
-          "note": "addTaskActor=去重追加非全删全插（C14）",
+          "note": "addTaskActor=去重追加非全删全插（C14）；actorIds 的逗号串与数组两形同判据（issues/142 B 批 · spec 06 §2.11：逐元素 trim、空串/纯空白/null 丢弃、同次调用折叠，落库与判重取 trim 后的值；'0'/'00'/'a' 是三张不同的脸，不得当空值丢）；processTaskId 另判一档（缺失/空串/0/负数一律报错，不拿 0 落孤儿行）",
           "req": "{processTaskId, actorIds 非空（数组或逗号串）}",
           "resp": "ok；缺失→processTaskId/actorIds 缺失"
         },
@@ -290,7 +290,7 @@
           "method": "taskTransfer",
           "permission": "wf:processTask:transfer",
           "note": "issues/115 转办（摘原人 + 换新人），区别于 surrogate 的只追加：待办从 A 挪到 B、同一 processTaskId 不新建任务；参与者判据以 wf_process_task_actor 表为准；三件留痕写任务变量（submitType=7 当前槽位 + tf_transferHistory 追加式跨跳账本 + tf_transferTo/tf_transferReason 单跳键 + tf_approvalComment 末跳可读文案）；注意：严禁覆写任务 actor_id/operator 列（进行中任务该列恒无值是既有不变量，pageDoneTasks 按 state<>10 AND t.operator=? 过滤，覆写会让被摘走的人凭空出现在「我已办」），办理人记 update_user + tf_transferHistory[].operator；msg 跨栈逐字统一",
-          "req": "{processTaskId, fromActor, toActor, reason?, operator 硬必填（不接受缺省）}",
+          "req": "{processTaskId, fromActor, toActor, reason?, operator 硬必填（不接受缺省）}；fromActor/toActor/operator 走单人档归一（trim＋丢空；数组形态 [\"x\"] 收敛为那一个人，0 个或多个落既有\"必填\"档，不拆逗号——契约上是单人，拆了等于静默丢掉其余人）",
           "resp": "ok；data=null；失败 99999999 + msg：operator 必填 / fromActor 必填 / toActor 必填 / 无权限转办该任务 / 原办理人不是该任务参与人 / 目标人已是该任务参与人 / 任务非进行中，不可转办"
         },
         {

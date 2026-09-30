@@ -363,11 +363,11 @@ public class MySqlRepository : IProcessRepository
         var existing = await FindCcActorIdsInternalAsync(lease.Conn, instanceId);
         var now = ToDb(Clock.Now);
         // issues/141 G10「空不创建行」（spec 06 §2.10）写侧兜底：与内存仓同一条判据（共用
-        // PageQuery.NormalizeCcActors）——空串/纯空白/null 一律丢弃，落库值取 trim 后的串。
+        // PageQuery.NormalizeActors）——空串/纯空白/null 一律丢弃，落库值取 trim 后的串。
         // 绕过引擎漏斗／门面直连仓储的调用方也建不出 actor_id='' 的行，且 " 123 " 与 "123"
         // 判为同一人（与上面的写侧判重同一条尺子；旧形状实测 actorIds={"","   ",null,"8801"}
         // 真落 3 行，其中两行的 actor_id 是 '' 与 '   '）。
-        foreach (var actorId in PageQuery.NormalizeCcActors(actorIds))
+        foreach (var actorId in PageQuery.NormalizeActors(actorIds))
         {
             if (existing.Contains(actorId)) continue;
             var id = IdGen.NextId();
@@ -447,26 +447,45 @@ public class MySqlRepository : IProcessRepository
         return actors;
     }
 
+    /// <summary>
+    /// 参与者追加（去重追加语义，对齐 JDBC addTaskActor：existing 差集插入）。
+    /// <para><b>issues/142 B 批 · spec 06 §2.11「两仓 addTaskActor 写侧兜底」</b>：入参先过归属值
+    /// 判据单点 <c>PageQuery.NormalizeActors</c>（与内存仓、cc 侧、
+    /// 门面腿同一枚尺子）——空串/纯空白/null 丢弃、<b>落库值取 trim 后的串</b>，
+    /// 绕过门面/引擎直连仓储的调用方也灌不进空归属值，<c>" 123 "</c> 与 <c>"123"</c> 判为同一个人。
+    /// 历史脏行（<c>actor_id=''</c>／带空格）不清理（owner 拍：判重在写侧、查询侧不引入 DISTINCT）。</para>
+    /// <para><b>主键另判一档</b>（§2.11）：<c>taskId</c> 缺失/非正数响亮报错，不得拿 <c>0</c> 当 id
+    /// 往 <c>wf_process_task_actor</c> 钉孤儿行。与内存仓同一条判据、同一个答案。</para>
+    /// </summary>
     public virtual async Task AddTaskActorAsync(long taskId, List<string> actors)
     {
+        FlowUtil.RequireTaskId(taskId);
         await using var lease = await RentAsync();
         // 去重追加（对齐 JDBC addTaskActor：existing 差集插入）
         var existing = await FindTaskActorsInternalAsync(lease.Conn, taskId);
-        var toAdd = actors.Where(a => !existing.Contains(a)).ToList();
+        var toAdd = PageQuery.NormalizeActors(actors).Where(a => !existing.Contains(a)).ToList();
         await InsertTaskActorsAsync(lease.Conn, taskId, toAdd, null);
     }
 
+    /// <summary>
+    /// 参与者删除（issues/142 §9.2 第二批 · spec 06 §2.11 同一把尺子搬到删除位）：
+    /// 删除列表先过归属值判据单点 <see cref="PageQuery.NormalizeActors"/>（与内存仓同一枚）——
+    /// 不 trim 则「 8601 」删不掉库里的 8601；归一后为空 ⇒ <b>一条 DELETE 都不发</b>
+    /// （空串入参批量误删历史 <c>actor_id=''</c> 脏行）。与内存仓同一条判据、同一个答案。
+    /// </summary>
     public virtual async Task RemoveTaskActorAsync(long taskId, List<string> actors)
     {
+        var toRemove = PageQuery.NormalizeActors(actors);
+        if (toRemove.Count == 0) return;
         await using var lease = await RentAsync();
-        var inList = string.Join(",", actors.Select((_, i) => $"@a{i}"));
+        var inList = string.Join(",", toRemove.Select((_, i) => $"@a{i}"));
         await ExecAsync(lease.Conn,
             $"DELETE FROM wf_process_task_actor WHERE process_task_id = ? AND actor_id IN ({inList})",
             cmd =>
             {
                 cmd.Parameters.Add(new MySqlParameter { Value = taskId });
-                for (var i = 0; i < actors.Count; i++)
-                    cmd.Parameters.Add(new MySqlParameter($"@a{i}", actors[i]));
+                for (var i = 0; i < toRemove.Count; i++)
+                    cmd.Parameters.Add(new MySqlParameter($"@a{i}", toRemove[i]));
             });
     }
 

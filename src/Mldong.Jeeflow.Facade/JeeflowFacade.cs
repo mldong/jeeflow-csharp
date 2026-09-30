@@ -446,7 +446,8 @@ public partial class JeeflowFacade
     internal static string ToStr(object? val, string def) => val?.ToString() ?? def;
 
     /// <summary>
-    /// 归属/操作人入参归一化（issues/129 案 A · spec 06-facade.md:100 补句）。
+    /// 归属/操作人入参归一化（issues/129 案 A · spec 06-facade.md:100 补句 ＋ §2.11「落库与比较取
+    /// trim 后的值」）。
     ///
     /// 空串与<b>缺键同档</b>：传 ""（或全空白）视同未传，一并回落 demo 缺省 user1。
     /// 修前是 <c>ToStr(args.GetObj("operator"), "user1")</c>——只在 null 时兜缺省，显式空串
@@ -454,12 +455,13 @@ public partial class JeeflowFacade
     /// 丢掉 ⇒“我的实例/我的已办”读出<b>全库</b>（160 实测 25 行 vs user1 的 4 行，行上是别人的 operator）。
     /// 门面归一化是第一层，仓储的归属兜底是第二层（MySqlRepository.BuildWhere /
     /// MemoryRepository.ApplyConditions），两层都要在。
+    /// <b>本轮补 trim</b>（issues/142 B 批 · §2.11）：写侧归属值已统一落 trim 后的串，
+    /// 比较侧若还拿 <c>" user1 "</c> 去等就是两把尺子（<c>updateCCStatus</c> 的 operator 尤其——
+    /// 带空格的 operator 会把已读状态静默打到"谁也匹配不上"，历史 <c>actor_id=''</c> 的脏档则再也不会被覆写）。
+    /// 判据本体仍只有一枚：<see cref="PageQuery.NormalizeActorValue"/>。
     /// </summary>
-    internal static string OperatorArg(FlowData args)
-    {
-        var s = ToStr(args.GetObj("operator"));
-        return string.IsNullOrWhiteSpace(s) ? "user1" : s;
-    }
+    internal static string OperatorArg(FlowData args) =>
+        PageQuery.NormalizeActorValue(args.GetObj("operator")) ?? "user1";
 
     /// <summary>系统代执行（flow.auto）/ 超级管理员（flow.admin）放行——<c>IsAllowed</c> 既有约定，
     /// 撤回（issues/114）与转办（issues/115）共用同一判据。</summary>
@@ -479,22 +481,6 @@ public partial class JeeflowFacade
         return null;
     }
 
-    internal static List<string> ToStringList(object? val)
-    {
-        var list = new List<string>();
-        if (val is string sVal)
-        {
-            if (sVal.Length > 0)
-                foreach (var part in sVal.Split(',')) list.Add(part.Trim());
-        }
-        else if (val is System.Collections.ICollection coll)
-        {
-            foreach (var o in coll) list.Add(o?.ToString() ?? "");
-        }
-        return list.Where(t => t.Length > 0).ToList();
-    }
-
-    /// <summary>流程 JSON 中第一个任务节点 id（isFirstTaskNode 用）。</summary>
     /// <summary>
     /// issues/128：行上 <c>isFirstTaskNode</c> 的读取口径——与 Java
     /// <c>Boolean.parseBoolean(String.valueOf(rowFirst))</c> 同语义：

@@ -45,13 +45,36 @@ Task<List<string>> CreateCcInstanceIfAbsentAsync(long instanceId, string creator
 > **空抄送人不建 cc 行**（G10 · spec 06 §2.10）：三条入口解析抄送人集合时，**空串、纯空白、
 > 数组里的空元素一律丢弃，落库与比较的值取 `Trim` 后的串**；丢完为空 ⇒ 不建任何 cc 行、
 > 也**不 fire CC_CREATE（码 4）**，手动腿此时与"空集合"同档（`actorIds 缺失` 错误信封，
-> 不是新错误码）。判据单点＝`PageQuery.NormalizeCcActors`，**两层都挡**：
+> 不是新错误码）。判据单点＝`PageQuery.NormalizeActors`（旧名 `PageQuery.NormalizeCcActors`
+> 保留为它的转发，两者同一枚尺子），**两层都挡**：
 > ① 漏斗层＝引擎 `HandleCcActorsAsync` ＋门面 `createCCInstance`；
 > ② 写侧层＝`CreateCcInstanceAsync` 的实现义务（自带两仓已按它实现）＋ 接口默认实现
 > `CreateCcInstanceIfAbsentAsync`。集成方自实现仓储时**必须自己在最底层写入口丢空值并 trim**——
 > 只修漏斗的话，绕过引擎/门面直连仓储的调用方照样能把空归属值灌进 `actor_id`
 > （issues/129 那族"空 operator 读全库"的病根）。`"".Split(',')` 在 C# 与 Java 一样得到
 > **一个空元素**而不是零个，所以逗号串那条腿也必须过归一，别只判 `Length > 0`。
+
+### 任务参与者写侧归一（issues/142 B 批 · spec 06 §2.11）
+
+同一条尺子从抄送侧搬到任务侧（`wf_process_task_actor.actor_id` 也是归属列）。判据单点只有
+`PageQuery.NormalizeActors` 一枚，四条腿＋两仓都调它，**不另抄第二份**：
+
+| 入口 | 归一档 |
+|---|---|
+| `processTask/addCandidate`·`processTask/surrogate` 的 `actorIds` | `NormalizeActors(object)`＝两形入口：逗号串与数组同一判据，逐元素 trim、空串/纯空白/null 丢弃、同次调用折叠 |
+| `f_nextNodeOperator`／`tf_nextNodeOperator`（发起腿／消费腿） | 同上；数组元素**逐元素取值**，绝不整条 `ToString()`（那会落一个 `.NET` 类型名当参与者）；数字元素按 `InvariantCulture` 收敛成字符串；归一后为空 ⇒ 与"没填"同档（回落节点 assignee，不落零参与者待办） |
+| `processTask/transfer` 的 `fromActor`／`toActor`、`updateCCStatus` 的 `operator` | `NormalizeActorValue(object)`＝单人档：trim＋丢空；集合形态 `["x"]` 收敛为那一个人，0 个或多个 ⇒ 返回 `null` 走既有"必填"信封（契约上是单人，**不拆逗号**，拆了等于静默丢掉其余人） |
+| 两仓 `AddTaskActorAsync` | 写侧兜底：入参先过 `NormalizeActors`，落库与判重都取 trim 后的值 |
+
+三条硬要求与 §2.10 同构：① **两层都挡**（只修门面腿 ⇒ 直连仓储照样灌空值）；
+② **落库与比较取 trim 后的值**（`" 123 "` 与 `"123"` 是同一个人，不 trim 就打穿写侧判重）；
+③ **空入参沿用既有"缺参数"信封**（`processTaskId/actorIds 缺失`／`fromActor 必填`，不新造错误码/文案）；
+④ 反向哨兵：**判空一律 trim 后判长**，严禁 `Where(t => t.Length > 0)` 这种 trim 前判长
+（兜不住 `"  "`），`"0"`／`"00"`／`"a"` 是三张不同的脸，都不是空值，也不得被松散比较折叠。
+
+> **主键类参数另判一档**（§2.11）：`processTaskId` 缺失/空串/`0`/负数是调用方写错了，
+> 必须响亮报错，不得拿 `''`/`0` 当 id 落孤儿行——门面腿走既有缺参数信封，仓储腿一律抛
+> `JeeflowException`（文案不带内部码，issues/121 口径；单点＝`FlowUtil.RequireTaskId`）。
 
 ## 用户 SPI
 

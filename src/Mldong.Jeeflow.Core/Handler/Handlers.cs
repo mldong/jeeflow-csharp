@@ -24,6 +24,20 @@ public static class FlowUtil
         args[FlowConst.UserPostName] = u.PostName;
     }
 
+    /// <summary>
+    /// 主键类参数档位（issues/142 B 批 · spec 06 §2.11「主键类参数另判一档」）。
+    /// <para>这与"归属值为空 ⇒ 丢弃"是<b>两件事</b>：归属值可有可无，主键没有就是调用方写错了，
+    /// 静默接受会把 <c>process_task_id=0</c> 这种孤儿脏行钉进表里。缺失／空串／非正数一律响亮报错，
+    /// 文案不带内部码（issues/121 口径：内部码不进出口 msg）。
+    /// 门面腿另有一档：沿用该 action 既有的"缺参数"信封，不在这里造新文案。</para>
+    /// </summary>
+    public static long RequireTaskId(long? taskId)
+    {
+        if (taskId == null || taskId.Value <= 0)
+            throw new JeeflowException("processTaskId 缺失或非法");
+        return taskId.Value;
+    }
+
     /// <summary>自动构造标题：{realName}的{displayName}-{yyyy-MM-dd HH:mm}（C25：HH:mm 非 HH:mm:ss）。</summary>
     public static void AddAutoGenTitle(string? displayName, FlowData args, IClock clock)
     {
@@ -200,25 +214,17 @@ public class CreateTaskHandler : IHandler
         var actors = new List<string>();
         var args = execution.Args;
         // 1. 动态指定下一节点处理人优先（v1.0.1：对齐 boot2/boot3 tf_nextNodeOperator）
-        var nextNodeOperator = args.GetObj(FlowConst.NextNodeOperator);
-        if (nextNodeOperator != null && !string.IsNullOrEmpty(nextNodeOperator.ToString()))
+        // issues/142 B 批 · spec 06 §2.11：逗号串与数组<b>两形同判据</b>——逐元素 trim、
+        // 空串/纯空白/null 丢弃、同次调用折叠，数字元素收敛成字符串（旧形状里 null 会被串成
+        // "null"、整条数组会被串成 .NET 类型名当一个人用）。
+        // 归一后<b>为空 ⇒ 与"没填"同档</b>：继续回落 assignee／assignmentHandler。
+        // 旧形状在这一档上是两形两样：串腿给 "" 走 `IsNullOrEmpty` 回落 assignee，
+        // 数组腿给 [""] 却被当成"已指派"用 ⇒ 下一节点<b>零参与者</b>（§6.1 点名的死锁黑洞形状，
+        // 实测读数 Expected ["leader"] / Actual []）。
+        var nextOps = PageQuery.NormalizeActors(args.GetObj(FlowConst.NextNodeOperator));
+        if (nextOps.Count > 0)
         {
-            if (nextNodeOperator is System.Collections.ICollection coll)
-            {
-                foreach (var o in coll)
-                {
-                    var t = o?.ToString()?.Trim();
-                    if (!string.IsNullOrEmpty(t) && !actors.Contains(t)) actors.Add(t);
-                }
-            }
-            else
-            {
-                foreach (var a in nextNodeOperator.ToString()!.Split(','))
-                {
-                    var t = a.Trim();
-                    if (t.Length > 0 && !actors.Contains(t)) actors.Add(t);
-                }
-            }
+            actors.AddRange(nextOps);
             return actors;
         }
         // 2. 固定指派 assignee——token 即变量 key，能替换就换，换不了就是字面量；
@@ -234,19 +240,8 @@ public class CreateTaskHandler : IHandler
                     token = token.Replace("applicant", execution.ProcessInstance?.Operator);
                 if (args.TryGetValue(token, out var v) && v != null)
                 {
-                    if (v is System.Collections.ICollection coll)
-                    {
-                        foreach (var o in coll)
-                        {
-                            var t = o?.ToString()?.Trim();
-                            if (!string.IsNullOrEmpty(t) && !actors.Contains(t)) actors.Add(t);
-                        }
-                    }
-                    else
-                    {
-                        var t = v.ToString()?.Trim();
-                        if (!string.IsNullOrEmpty(t) && !actors.Contains(t)) actors.Add(t);
-                    }
+                    // 变量值同样过归属值判据单点（两形同判据：串／数组／标量一个答案）
+                    actors.AddRange(ExcludeExisting(actors, PageQuery.NormalizeActors(v)));
                 }
                 else if (!actors.Contains(token))
                 {
@@ -262,18 +257,15 @@ public class CreateTaskHandler : IHandler
             {
                 var handler = execution.Context.FindAssignmentHandler(handlerName.Trim());
                 var result = await handler.AssignAsync(execution);
-                if (!string.IsNullOrEmpty(result))
-                {
-                    foreach (var a in result.Split(','))
-                    {
-                        var t = a.Trim();
-                        if (t.Length > 0 && !actors.Contains(t)) actors.Add(t);
-                    }
-                }
+                actors.AddRange(ExcludeExisting(actors, PageQuery.NormalizeActors(result)));
             }
         }
         return actors;
     }
+
+    /// <summary>并入新参与者时跳过已有的（判据单点已折叠同次调用内的重复，这里只防与前一档重排）。</summary>
+    private static List<string> ExcludeExisting(List<string> existing, List<string> incoming) =>
+        incoming.Where(a => !existing.Contains(a)).ToList();
 }
 
 /// <summary>
@@ -422,26 +414,14 @@ public class CountersignHandler : IHandler
         return new List<string>();
     }
 
-    /// <summary>办理人列表取值兼容（JSON 反序列化后可能是 List / 标量）。</summary>
-    internal static List<string> ToStringList(object? value)
-    {
-        var result = new List<string>();
-        if (value == null) return result;
-        if (value is System.Collections.ICollection coll)
-        {
-            foreach (var o in coll)
-            {
-                var s = o?.ToString()?.Trim();
-                if (!string.IsNullOrEmpty(s)) result.Add(s);
-            }
-        }
-        else
-        {
-            var s = value.ToString()?.Trim();
-            if (!string.IsNullOrEmpty(s)) result.Add(s);
-        }
-        return result;
-    }
+    /// <summary>
+    /// 办理人列表取值兼容（JSON 反序列化后可能是 List / 标量）。
+    /// issues/142 B 批：判据不再在本栈另抄一份——直接复用归属值单点
+    /// <see cref="PageQuery.NormalizeActors(object)"/>（逗号串/数组两形同判据、trim、空值丢弃、
+    /// 同次调用折叠）。旧副本与单点只差"折叠重复"和"串形态不拆逗号"两处，正是要防的分叉
+    /// （名册里同一个人排两次会多出一次串行投票）。
+    /// </summary>
+    internal static List<string> ToStringList(object? value) => PageQuery.NormalizeActors(value);
 
     private static FlowData BuildCountersignVars(
         ProcessInstance instance, List<ProcessTask> allTasks, string? nodeName)
