@@ -85,6 +85,15 @@ public static class FlowUtil
     /// 最终 NULL，<b>不抛错</b>——配置写错不该让流程卡死，也不许退化成"取当前时间"。
     /// 旧注释里"Java 的 <c>Integer.parseInt</c> 会抛异常打断建单、本栈是故意差异"那句已过期：
     /// java 侧同样改成落穿，八栈这条不再有分叉，"前缀须整数"不再是任何栈的抛错理由。</para>
+    /// <para><b>相对档前缀须非负</b>（issues/137 D，owner 2026-10-01 拍"判非负"，基准＝java
+    /// <c>FlowUtil.parseIntOrNull</c> <c>1649955</c>）：四档解析出的整数 <c>&lt; 0</c> 一律算"解析不出来"，
+    /// 与上面那些误配同路——落穿绝对档、仍算不出即 NULL。放行 <c>-5h</c> 会算出一个<b>过去</b>的时刻 ⇒
+    /// 新建的行当场即逾期，比"没配到期时间"更难发现，也正与本卡"任何一档都不许退化成取当前时间"
+    /// （issues/126 病灶形状）的精神冲突。<c>d</c> 档同判：它走 <c>AddDays</c> 日历加天，负数＝历日倒退，
+    /// 不是乘 86400 秒。
+    /// <b>只裁负、不裁加号</b>：<c>int.TryParse</c> 天然收 <c>-5</c> 也收 <c>+5</c>，这里只加比较、
+    /// <b>不换成正则去禁符号</b>——各栈整数解析（python <c>[+-]?</c>、node <c>[-+]?\d+</c>、
+    /// php <c>[+-]?\d{1,18}</c>）都收 '+'，裁掉加号等于新造一处跨栈分叉。</para>
     /// <para>钟一律由调用点注入（<c>clock ?? SystemClock.Instance</c>，issues/120）：本栈是八栈里唯一
     /// 域层带钟注入的栈，改成裸 <c>DateTime.Now</c> 会让"到期时间"绕过时钟出口、测试失去确定性。</para>
     /// </summary>
@@ -105,13 +114,19 @@ public static class FlowUtil
             }
         }
         var now = clock.Now;
-        if (expireTime.EndsWith("s") && int.TryParse(expireTime[..^1], out var seconds))
+        // issues/137 D（owner 2026-10-01 拍"判非负"，基准＝java FlowUtil.parseIntOrNull 1649955）：
+        // 四档各加 `>= 0` 守卫——负数前缀算"解析不出来"，条件不成立即天然落穿到下面的绝对档，
+        // 仍失败则 NULL。放行 `-5h` 会算出一个过去的时刻 ⇒ 新建行当场即逾期（比"没配"更难发现），
+        // 也不许退化成取当前时间（issues/126 病灶形状）。d 档走 AddDays 日历加天，负数＝历日倒退，同判。
+        // 只裁负、不裁加号：int.TryParse 本身就收 `+5`，这里只加比较判断，不换成禁符号的正则——
+        // python [+-]? / node [-+]?\d+ / php [+-]?\d{1,18} 都收 '+'，裁加号等于新造一处跨栈分叉。
+        if (expireTime.EndsWith("s") && int.TryParse(expireTime[..^1], out var seconds) && seconds >= 0)
             return now.AddSeconds(seconds);
-        if (expireTime.EndsWith("m") && int.TryParse(expireTime[..^1], out var minutes))
+        if (expireTime.EndsWith("m") && int.TryParse(expireTime[..^1], out var minutes) && minutes >= 0)
             return now.AddMinutes(minutes);
-        if (expireTime.EndsWith("h") && int.TryParse(expireTime[..^1], out var hours))
+        if (expireTime.EndsWith("h") && int.TryParse(expireTime[..^1], out var hours) && hours >= 0)
             return now.AddHours(hours);
-        if (expireTime.EndsWith("d") && int.TryParse(expireTime[..^1], out var days))
+        if (expireTime.EndsWith("d") && int.TryParse(expireTime[..^1], out var days) && days >= 0)
             return now.AddDays(days);
         if (DateTime.TryParseExact(expireTime, TimeFormat, null,
                 System.Globalization.DateTimeStyles.None, out var abs)) return abs;

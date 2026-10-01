@@ -100,6 +100,94 @@ public class ExpireTime126Tests
             .ExpireTime);
     }
 
+    // ═══ issues/137 D（相对档前缀须非负）═══
+
+    /// <summary>
+    /// 负向④（issues/137 D · owner 2026-10-01 拍"判非负"，基准＝java <c>FlowUtil.parseIntOrNull</c>
+    /// 提交 <c>1649955</c>）：<c>s/m/h/d</c> 四档里前缀解析出的整数 <b>&lt; 0 一律算"解析不出来"</b>
+    /// ⇒ 落穿绝对档 ⇒ 仍失败即 <b>NULL</b>。
+    ///
+    /// <para>为什么"照旧生效"不行：放行 <c>-5h</c> 算出的是一个<b>过去</b>的时刻 ⇒ 新建的行当场就是逾期，
+    /// 比"没配到期时间"更难发现；而"退化成当前时间"正是 issues/126 的病灶形状（<c>expire == create</c>
+    /// ＝建单即逾期）。两档都不许，唯一合法出口是空。</para>
+    ///
+    /// <para>本栈四档是同一段 <c>int.TryParse</c> 内联条件（<c>Handler/Handlers.cs</c> 的
+    /// <c>FlowUtil.ProcessTime</c>，也是全栈到期档的唯一尺子——建单五处写点与实例级写点都汇到它），
+    /// 所以<b>四档各钉一格</b>（<c>-30s / -5m / -5h / -5d</c>）：摘掉任何一档的 <c>&gt;= 0</c> 守卫，
+    /// 本格都当场红。负数格用 <c>Assert.True(== null)</c> 带消息，红样里能直接看到那个过去时刻。</para>
+    ///
+    /// <para><b>只裁负、不裁加号</b>：<c>int.TryParse</c> 天然收 <c>-5</c> 也收 <c>+5</c>，判负只能加比较，
+    /// 换成"正则禁符号"会把加号一起裁掉——python <c>[+-]?</c>、node <c>[-+]?\d+</c>、php
+    /// <c>[+-]?\d{1,18}</c> 都收 <c>'+'</c>，那是新造一处跨栈分叉。加号档的正向对照格见下面
+    /// <see cref="PlusSignAndOtherExpireTiersStillResolve"/>，它保证上面四判不是恒真。</para>
+    ///
+    /// <para><c>0h</c> 仍算合法偏移（基准侧 <c>parseIntOrNull</c> 也只判 <c>&lt; 0</c>），本栈不额外加码。</para>
+    /// </summary>
+    [Fact]
+    public void NegativeRelativeExpressionStaysNullNotPastTime()
+    {
+        var clock = new FixedClock(new DateTime(2026, 8, 1, 9, 0, 0));
+        var emptyArgs = new FlowData();
+
+        // 尺子本身（ProcessTime 直调）：四档负前缀 ⇒ null，不落 now、不落回拨后的过去时刻
+        foreach (var expr in new[] { "-30s", "-5m", "-5h", "-5d" })
+            Assert.True(FlowUtil.ProcessTime(expr, emptyArgs, clock) == null,
+                $"负数相对档 {expr} 必须算\"解析不出来\"⇒ NULL（实得 {FlowUtil.ProcessTime(expr, emptyArgs, clock)}）");
+
+        // 建单路径（写点①，跨栈门禁 L2-27 的尺子：该行 expire_time 为空，不是"早于 create_time"）
+        foreach (var expr in new[] { "-30s", "-5m", "-5h", "-5d" })
+        {
+            var task = Instance().CreateTask(Node("approve", expr), "审批", One(), "op", 0, true, clock);
+            Assert.NotNull(task.CreateTime);   // 对照：这一行确实建过单，不是"没建行"造成的空
+            Assert.True(task.ExpireTime == null,
+                $"配 {expr} 的行 expire_time 必须留空；放行它会写进 {task.ExpireTime}" +
+                "（＝当下 09:00 往前倒），新建即逾期，比\"没配\"更难发现");
+        }
+    }
+
+    /// <summary>
+    /// 正向对照（issues/137 D 的"有牙"那一半）：判负<b>只</b>裁掉负号，其余档位一律不动。
+    ///
+    /// <para>① 加号档四档全部照旧算得出且≈<c>now + 偏移</c>——这一格就是"没顺手裁加号"的证据；
+    /// ② 裸数字档（<c>2h</c>/<c>2d</c>）不变；③ 变量档与绝对档不变（<c>"2026-12-31 10:00:00"</c>
+    /// 照旧成功，绝对串末尾是数字不会被四档吃掉）；④ 坏前缀 <c>xh</c>/<c>2.5h</c> 行为不变
+    /// （本来就走"落穿到绝对档 ⇒ NULL"，issues/137 C 那条）。</para>
+    /// </summary>
+    [Fact]
+    public void PlusSignAndOtherExpireTiersStillResolve()
+    {
+        var clock = new FixedClock(new DateTime(2026, 8, 1, 9, 0, 0));
+
+        // ① 加号档：四档都要照旧生效（摘掉守卫会多放行负数，加正则裁符号会把这四格一起打死）
+        Assert.Equal(clock.Now.AddSeconds(30), FlowUtil.ProcessTime("+30s", new FlowData(), clock));
+        Assert.Equal(clock.Now.AddMinutes(5), FlowUtil.ProcessTime("+5m", new FlowData(), clock));
+        Assert.Equal(clock.Now.AddHours(2), FlowUtil.ProcessTime("+2h", new FlowData(), clock));
+        Assert.Equal(clock.Now.AddDays(3), FlowUtil.ProcessTime("+3d", new FlowData(), clock));
+
+        // 建单路径同样带值，且差值≈偏移（不是"非空"空判）
+        var plusHours = Instance().CreateTask(Node("approve", "+2h"), "审批", One(), "op", 0, true, clock);
+        Assert.NotNull(plusHours.ExpireTime);
+        var delta = (long)(plusHours.ExpireTime!.Value - plusHours.CreateTime!.Value).TotalSeconds;
+        Assert.True(delta >= MinDelta && delta <= MaxDelta,
+            $"+2h 的 expire − create 应≈2h（实得 {delta}s）");
+
+        // ② 裸数字档不变
+        Assert.Equal(clock.Now.AddHours(2), FlowUtil.ProcessTime("2h", new FlowData(), clock));
+        Assert.Equal(clock.Now.AddDays(2), FlowUtil.ProcessTime("2d", new FlowData(), clock));
+
+        // ③ 变量档（第一档）与绝对档（第三档）不变
+        var inst = Instance();
+        inst.AddVariable(new FlowData { ["dueAt"] = "2026-12-31 10:00:00" });
+        Assert.Equal(new DateTime(2026, 12, 31, 10, 0, 0),
+            inst.CreateTask(Node("approve", "dueAt"), "审批", One(), "op", 0, true, clock).ExpireTime);
+        Assert.Equal(new DateTime(2026, 12, 31, 10, 0, 0),
+            FlowUtil.ProcessTime("2026-12-31 10:00:00", new FlowData(), clock));
+
+        // ④ 坏前缀行为不变（issues/137 C：落穿到绝对档 ⇒ NULL，不抛错）
+        Assert.Null(FlowUtil.ProcessTime("xh", new FlowData(), clock));
+        Assert.Null(FlowUtil.ProcessTime("2.5h", new FlowData(), clock));
+    }
+
     // ═══ §1.8 两格（引擎层：串行会签首成员 + 推进出的第二成员）═══
 
     /// <summary>夹具：串行会签节点 task1 只加 <c>expireTime:"2h"</c>，其余与原 06 夹具逐字同。</summary>
