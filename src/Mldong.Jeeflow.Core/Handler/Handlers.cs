@@ -94,6 +94,17 @@ public static class FlowUtil
     /// <b>只裁负、不裁加号</b>：<c>int.TryParse</c> 天然收 <c>-5</c> 也收 <c>+5</c>，这里只加比较、
     /// <b>不换成正则去禁符号</b>——各栈整数解析（python <c>[+-]?</c>、node <c>[-+]?\d+</c>、
     /// php <c>[+-]?\d{1,18}</c>）都收 '+'，裁掉加号等于新造一处跨栈分叉。</para>
+    /// <para><b>相对档前缀允许两端空白</b>（issues/137 E，owner 2026-10-01 拍"统一 trim"，基准＝java
+    /// <c>FlowUtil.parseIntOrNull</c> <c>bf1f401</c>）：<b>本栈不显式 trim，靠的是 <c>int.TryParse</c>
+    /// 的默认空白容忍</b>——默认 <c>NumberStyles.Integer</c> 含 <c>AllowLeadingWhite|AllowTrailingWhite</c>，
+    /// 于是 <c>" 2h"</c> 切出的前缀 <c>" 2"</c> 天然解成 2（实测 <c>int.TryParse(" 2")==true</c>），
+    /// "同一份流程定义别家有到期时间、这一家没有"这件分叉在本栈不存在。
+    /// ⚠️ 这是一处<b>隐式依赖</b>，别被"六栈统一写法"顺手改掉：<b>若将来把 <c>int.TryParse</c> 换成正则
+    /// （如 <c>^[+-]?\d+$</c>）或 <c>ParseExact</c>，必须显式 trim 前缀</b>，否则
+    /// <c>ExpireTime126Tests.PaddedRelativePrefixStillApplies</c> 的①当场红。
+    /// 反过来也<b>不要</b>改成"整个表达式先去空白再判末位单位"——<c>"2h "</c> 的末位是空格、四档
+    /// <c>EndsWith</c> 全不认，按契约②必须落穿成 NULL；裁的边界只到<b>前缀</b>，变量档的键名与
+    /// 绝对档的串同样不 trim（⑥/绝对档格钉住）。</para>
     /// <para>钟一律由调用点注入（<c>clock ?? SystemClock.Instance</c>，issues/120）：本栈是八栈里唯一
     /// 域层带钟注入的栈，改成裸 <c>DateTime.Now</c> 会让"到期时间"绕过时钟出口、测试失去确定性。</para>
     /// </summary>
@@ -120,6 +131,11 @@ public static class FlowUtil
         // 也不许退化成取当前时间（issues/126 病灶形状）。d 档走 AddDays 日历加天，负数＝历日倒退，同判。
         // 只裁负、不裁加号：int.TryParse 本身就收 `+5`，这里只加比较判断，不换成禁符号的正则——
         // python [+-]? / node [-+]?\d+ / php [+-]?\d{1,18} 都收 '+'，裁加号等于新造一处跨栈分叉。
+        // issues/137 E（相对档前缀允许两端空白）：本栈**不显式 trim**——int.TryParse 的默认
+        // NumberStyles.Integer 已含 AllowLeadingWhite|AllowTrailingWhite，`" 2h"` 的前缀 `" 2"` 天然解成 2。
+        // 隐式依赖，改动前看方法注释那段 ⚠️：换成正则/ParseExact 就必须补 trim；而**别**在这里
+        // `expireTime = expireTime.Trim()`（整串去空白）——那会让 `"2h "` 变成合法的 `2h`，契约②要的
+        // 是"末位不是 s/m/h/d ⇒ 认不出单位 ⇒ 落穿 NULL"；变量档的键名与绝对档的串同样不 trim。
         if (expireTime.EndsWith("s") && int.TryParse(expireTime[..^1], out var seconds) && seconds >= 0)
             return now.AddSeconds(seconds);
         if (expireTime.EndsWith("m") && int.TryParse(expireTime[..^1], out var minutes) && minutes >= 0)

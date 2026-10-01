@@ -188,6 +188,105 @@ public class ExpireTime126Tests
         Assert.Null(FlowUtil.ProcessTime("2.5h", new FlowData(), clock));
     }
 
+    // ═══ issues/137 E（相对档前缀允许两端空白）═══
+
+    /// <summary>
+    /// issues/137 E（owner 2026-10-01 拍"统一 trim" · spec 04 §相对档前缀允许两端空白，
+    /// 基准＝java <c>FlowUtil.parseIntOrNull</c> 提交 <c>bf1f401</c>）：前缀两端带空白的相对档
+    /// <b>照样算得出</b>，而单位符后面的空白<b>不豁免</b>。
+    ///
+    /// <para><b>本栈是"实测已合规"，产品代码零改动</b>：<c>int.TryParse</c> 用的是默认
+    /// <c>NumberStyles.Integer</c>（含 <c>AllowLeadingWhite|AllowTrailingWhite</c>），
+    /// 所以 <c>" 2h"</c> 裁出的前缀 <c>" 2"</c> 天然解成 2 ——go 显式 <c>TrimSpace</c>、rust
+    /// <c>.trim()</c>、java <c>Integer.parseInt</c> 与本栈正则-less 形状之间的空白分叉，在本栈不存在。
+    /// 这一格的职责是<b>把三条分界钉住</b>，并把那处<b>隐式依赖</b>变成有名字的判据：哪天有人把
+    /// <c>TryParse</c> 换成正则或 <c>ParseExact</c>（禁空白），①当场红。</para>
+    ///
+    /// <para>三条分界（判据是<b>同一行</b>的 <c>expire − create</c>／固定钟上的精确时刻，不是"非空"）：
+    /// ① <c>" 2h"</c>／<c>"\t2h"</c>／<c>"2 h"</c>（空白落在<b>前缀区内</b>、末位仍是单位符）⇒ 照旧
+    ///    <c>now+2h</c>；<c>d</c> 档同尺（<c>" 2d"</c> 走 <c>AddDays</c> 日历加天）；
+    /// ② <c>"2h "</c> ⇒ 末位是空格、四档 <c>EndsWith</c> 全不认 ⇒ 落穿绝对档 ⇒ <b>NULL</b>
+    ///    （这一格就是"只裁前缀、不裁整串"的钉子：整串去空白后它会变成合法的 <c>2h</c>）；
+    /// ③ <c>" 2.5h"</c> ⇒ 裁完空白照样是小数误配 ⇒ 仍落穿（trim 不是把"裁空白"做成"裁容错"）。</para>
+    /// </summary>
+    [Fact]
+    public void PaddedRelativePrefixStillApplies()
+    {
+        var clock = new FixedClock(new DateTime(2026, 8, 1, 9, 0, 0));
+        var emptyArgs = new FlowData();
+
+        // ① 前缀带空白：空格/tab/数字与单位符之间三形，都该算出 now+2h
+        foreach (var expr in new[] { " 2h", "\t2h", "2 h" })
+            Assert.Equal(clock.Now.AddHours(2), FlowUtil.ProcessTime(expr, emptyArgs, clock));
+
+        // 建单路径（写点①）同判：同一行 expire − create 落进 2h 带宽
+        var task = Instance().CreateTask(Node("approve", " 2h"), "审批", One(), "op", 0, true, clock);
+        Assert.NotNull(task.CreateTime);   // 对照：这一行确实建过单
+        Assert.NotNull(task.ExpireTime);   // 摘掉空白容忍（本栈＝改成禁空白的整数校验）就空在这里
+        var delta = (long)(task.ExpireTime!.Value - task.CreateTime!.Value).TotalSeconds;
+        Assert.True(delta >= MinDelta && delta <= MaxDelta,
+            $"带空前缀的 2h 的 expire − create 应≈2h（实得 {delta}s）");
+
+        // d 档经的是另一个 EndsWith 分支，同一把尺子 ⇒ 空白同样吃掉（AddDays 日历加天）
+        Assert.Equal(clock.Now.AddDays(2), FlowUtil.ProcessTime(" 2d", emptyArgs, clock));
+
+        // ② 单位符后面带空白 ⇒ 末位不是 s/m/h/d ⇒ 认不出单位 ⇒ 落穿绝对档 ⇒ NULL
+        var trailing = Instance().CreateTask(Node("approve", "2h "), "审批", One(), "op", 0, true, clock);
+        Assert.NotNull(trailing.CreateTime);
+        Assert.True(trailing.ExpireTime == null,
+            "配「2h␣」（单位符后带空格）的行 expire_time 必须留空（实得 " +
+            $"{trailing.ExpireTime}）；这里若算出了值，说明裁空白被做成了\"整个表达式去空白\"——" +
+            "那是没立过法的一档");
+        Assert.True(FlowUtil.ProcessTime("2d ", emptyArgs, clock) == null,
+            "d 档同理：\"2d \" 末位是空格 ⇒ 落穿 ⇒ NULL");
+
+        // ③ trim 之后照样是误配（小数）⇒ 仍落穿
+        Assert.True(FlowUtil.ProcessTime(" 2.5h", emptyArgs, clock) == null,
+            "\" 2.5h\" 裁完空白仍是小数 ⇒ 落穿 ⇒ NULL");
+    }
+
+    /// <summary>
+    /// issues/137 E 的三张对照面（证明上一格不是恒真）：
+    /// ④ <b>判负在裁空白之后照旧生效</b>——<c>" -5h"</c> 裁成 <c>-5</c>，<c>&gt;= 0</c> 守卫仍拦（137 D）；
+    ///    <c>"-5m "</c> 末位带空格，连单位都认不出，同为 NULL；
+    /// ⑤ 不带空格的 <c>2h</c>/<c>+2h</c> 正向对照——空白那批新格若写得恒真，这两格也一起红，
+    ///    而它们同时也是"加号照旧收"的旧钉子；
+    /// ⑥ <b>变量档与绝对档的字符串本身不 trim</b>：<c>" dueAt "</c> 取不到变量 <c>dueAt</c>
+    ///    （<c>args.ContainsKey</c> 吃原串）⇒ 末位空格 ⇒ 相对档不认 ⇒ 绝对档 <c>TryParseExact</c>
+    ///    也不吃前导空白 ⇒ NULL。这一格和 ② 一起，是"整串 trim"变异的两个试金石——
+    ///    真在 <c>ProcessTime</c> 开头 trim，⑥ 会命中变量档、② 会算出 2h，两格同时红。</para>
+    /// </summary>
+    [Fact]
+    public void PaddedPrefixKeepsNegativeVariableAndAbsoluteTiersUnchanged()
+    {
+        var clock = new FixedClock(new DateTime(2026, 8, 1, 9, 0, 0));
+        var emptyArgs = new FlowData();
+
+        // ④ 带空白的负数档：trim 后判负照旧 ⇒ NULL（不是往前倒的那个过去时刻）
+        foreach (var expr in new[] { " -5h", " -5d", " -30s" })
+            Assert.True(FlowUtil.ProcessTime(expr, emptyArgs, clock) == null,
+                $"带空白的负数相对档「{expr}」必须仍是 NULL（实得 " +
+                $"{FlowUtil.ProcessTime(expr, emptyArgs, clock)}）——trim 之后判负照旧");
+
+        // ⑤ 不带空格的对照（新格不恒真 + 加号照旧收）
+        Assert.Equal(clock.Now.AddHours(2), FlowUtil.ProcessTime("2h", emptyArgs, clock));
+        Assert.Equal(clock.Now.AddHours(2), FlowUtil.ProcessTime("+2h", emptyArgs, clock));
+
+        // ⑥ 变量档键名不 trim ⇒ " dueAt " 取不到 dueAt ⇒ 落穿 ⇒ NULL
+        var blankKey = new FlowData { ["dueAt"] = "2026-12-31 10:00:00" };
+        var blankKeyExpire = FlowUtil.ProcessTime(" dueAt ", blankKey, clock);
+        Assert.True(blankKeyExpire == null,
+            $"变量档「 dueAt 」不许因本次 trim 突然取到值（实得 {blankKeyExpire}）");
+        // 精确键名照旧命中（证明上一行不是"变量档整体坏了"造成的假绿）
+        Assert.Equal(new DateTime(2026, 12, 31, 10, 0, 0), FlowUtil.ProcessTime("dueAt", blankKey, clock));
+
+        // 绝对档的串同样不 trim：带前导空格的合法时间串仍算解析不出
+        Assert.True(FlowUtil.ProcessTime(" 2026-12-31 10:00:00", emptyArgs, clock) == null,
+            "绝对档不做 trim（裁它会改的是另一件事）");
+        Assert.Equal(new DateTime(2026, 12, 31, 10, 0, 0),
+            FlowUtil.ProcessTime("2026-12-31 10:00:00", emptyArgs, clock));
+    }
+
     // ═══ §1.8 两格（引擎层：串行会签首成员 + 推进出的第二成员）═══
 
     /// <summary>夹具：串行会签节点 task1 只加 <c>expireTime:"2h"</c>，其余与原 06 夹具逐字同。</summary>
