@@ -89,6 +89,17 @@ public static class ModelParser
             PreInterceptors = Str(root, "preInterceptors"),
             RelTableName = Str(root, "relTableName"),
             PersistMode = Str(root, "persistMode"),
+            // issues/137 A · 裁定 A（批二 §3-4）· **这一行就是本栈的断链**：
+            // `JeeflowEngine.cs:59-61` 读的是 `model.ExpireTime`（流程定义**顶层**的「期望完成时间」
+            // 表达式，spec 02:21/55），而本初始化器此前逐字段搬了九项、**唯独漏了 ExpireTime**
+            // （`ProcessModel.cs:8` 那个属性一直在，全仓无一处给它赋值）⇒ 引擎那句判空守卫永远读到 null、
+            // `wf_process_instance.expire_time` 在本栈**恒 NULL**——"形状是 A、链路断在解析这一跳"。
+            // java 参考实现同病（批二 §3-4 的 go 腿普查查出，已随 jeeflow-java `d5d0395` 补上），
+            // 故 §3-4 真正的整改面是**八栈**而不是案文写的六栈。
+            // 取证格＝`InstanceExpireTime137Tests.ParserCarriesRootExpireTimeIntoProcessModel`
+            // （摘掉本行 ⇒ 该类 9 格里 7 格红，红的全是"配了该有值"那几格；剩下 2 格是"该留 NULL"那两族，
+            //  在断链状态下反而恒绿——这就是本案为什么必须有一枚解析层的格子）。
+            ExpireTime = Str(root, "expireTime"),
         };
         if (root.TryGetValue("ext", out var extObj) && extObj is Dictionary<string, object?> extDict)
         {
