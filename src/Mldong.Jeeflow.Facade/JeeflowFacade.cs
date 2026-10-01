@@ -75,6 +75,7 @@ public partial class JeeflowFacade
                 "processTask/surrogate" => await TaskSurrogateAsync(args),
                 "processTask/addCandidate" => await TaskSurrogateAsync(args),
                 "processTask/transfer" => await TaskTransferAsync(args),
+                "processTask/removeTaskActor" => await TaskRemoveActorAsync(args),  // issues/115 第 47 个 action
                 "processTask/latest" => await TaskLatestAsync(args),
                 // ── 流程设计 ──
                 "processDesign/page" => await DesignPageAsync(args),

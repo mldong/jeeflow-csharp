@@ -923,6 +923,76 @@ public partial class JeeflowFacade
             new ProcessEvent { EventType = eventType, SourceId = sourceId, Data = data },
             _context.EventListeners);
 
+    /// <summary>
+    /// 摘除参与人（issues/115 残留 · 门面第 <b>47</b> 个 action，spec 06 §processTask/removeTaskActor）：
+    /// SPI 侧 <see cref="IProcessRepository.RemoveTaskActorAsync"/> 从第一天起就是<b>必选</b>方法、
+    /// 本栈两仓（内存 / MySQL）都实现，只是没上门面——摘人只能靠 <c>transfer</c>（摘 A <b>并</b>加 B）。
+    /// 本 action 补的就是这一段（八栈同批）。
+    /// <para>三个兄弟 action 的分工写清楚，免得后来人把三条混用：
+    /// <c>processTask/surrogate</c>／<c>addCandidate</c>＝<b>只加</b>（加签，原人保留可办）；
+    /// <c>processTask/transfer</c>＝<b>换人</b>（摘 A 加 B，写 submitType=7 ＋ tf_transferHistory 留痕）；
+    /// 本 action＝<b>只摘不加、零留痕</b>：删掉 <c>actorIds</c> 在本任务的参与者行，不新建任务、
+    /// 不写任何任务变量、不覆写任务 <c>actor_id</c>/<c>operator</c> 列、<b>不 fire 事件</b>
+    /// （issues/132 §11.3 定稿的事件集里没有"摘除参与人"这一码，码 7 <c>TASK_TRANSFER</c> 的语义是
+    /// "参与者被替换"，只摘不加却发码 7 等于凭空造出一条没发生的转办事实——要立法先开 issue）。</para>
+    /// <para>六档守卫（次序逐栈一致，spec 同节钉死，不接受各栈自行排序）：operator 硬必填 →
+    /// 主键/集合缺失 → 任务存在 → 归属判据 → 仅 DOING → 不得摘空 → 落库。归属判据沿用
+    /// <c>transfer</c> 口径（只能摘自己那一票，<c>flow.auto</c>/<c>flow.admin</c> 例外，
+    /// <see cref="IsPrivilegedOperator"/> 大小写不敏感既有档）；"不得摘空"是本 action 独有的下限——
+    /// 摘空会造出<b>无人可办又无法撤回重派的死单</b>，比"配错表达式落 NULL"更难恢复。</para>
+    /// <para>幂等：非参与者静默忽略，重放第二次仍得成功信封（本 action 是"清理/收回"用途）。</para>
+    /// </summary>
+    private async Task<Dictionary<string, object?>> TaskRemoveActorAsync(FlowData args)
+    {
+        // operator 先判必填：参数全缺时若先报缺参数，会把鉴权缺口藏进"缺参数"报错里（spec 同节守卫次序）。
+        // 归一在入口就做（NormalizeActorValue＝trim＋丢空），不沿用 transfer 现状那支未 trim 的形状——
+        // 新增代码不该重犯 issues/142 §2.11 已立法的毛病（transfer 的 operator trim 随批二 §3-6 单独收）。
+        var op = PageQuery.NormalizeActorValue(args.GetObj("operator"));
+        if (op == null) return Error("operator 必填");
+        // 主键档与归属值档分得很清楚（§2.11「主键类参数另判一档」），文案与判据都复用兄弟 action
+        // surrogate 那一支（不另造，spec 同节第 8 条「同族同文案」）：processTaskId 缺失/空串/非正数
+        // ⇒ 响亮报错；actorIds 归一后为空 ⇒ 同一逐字文案。两条都不落库，空串元素也绝不会被喂进
+        // DELETE（历史 actor_id='' 脏行因此安全）。
+        var taskId = ToLong(args.GetObj(FlowConst.ProcessTaskIdKey));
+        var actors = PageQuery.NormalizeActors(args.GetObj("actorIds"));
+        if (taskId == null || taskId.Value <= 0 || actors.Count == 0)
+            return Error("processTaskId/actorIds 缺失");
+        var task = await _repository.FindTaskByIdAsync(taskId!.Value);
+        if (task == null) return Error("任务不存在");
+        // 归属判据同 transfer：被摘集合必须含操作人本人（入参两半边都取归一后的串，比较才咬得上），
+        // flow.auto / flow.admin 例外。transfer 能"摘 A 加 B"是因为 A 就是操作人本人，
+        // 本 action 不得成为借道摘他人的口子。
+        if (!IsPrivilegedOperator(op) && !actors.Contains(op)) return Error("无权限摘除该任务参与人");
+        // 前置态：仅进行中（DOING=10）任务可摘人。已办结/撤回/废弃任务的历史参与人行是
+        // approvalRecord 的取证依据（它读全状态任务行），摘它等于改写审批历史。
+        if (!task.IsDoing()) return Error("任务非进行中，不可摘除参与人");
+        // 以参与者表为判据（聚合副本可能滞后于加签/转办的增量写入，与 transfer 同源）
+        var current = await _repository.FindTaskActorsAsync(taskId!.Value);
+        var targets = new HashSet<string>(actors);
+        // 【语义 6】匹配取归一值、DELETE 取行上的原值（§2.11 硬要求②「落库与比较取 trim 后的值」的
+        // <b>删除腿</b>）：库里的行可能是修复前落下的未 trim 原值 " leader "，入参 "leader" 必须判成
+        // 同一个人<b>并真删掉它</b>——所以匹配用归一形，喂给仓储的删除值是<b>那一行的原值</b>。
+        // 只拿归一值去 DELETE 会"判成同一人却一条没删"：门面报成功而被摘的人待办还在，是<b>假成功</b>
+        // （go 栈 transfer 腿实测到并已这样修）。
+        // 【语义 5】"至少剩一人"的下限按<b>能办单的人数</b>算：归一后为空的行（actor_id=''/纯空白脏行）
+        // 既不匹配也不算"一个人"——它谁也办不了，拿它撑住下限等于让"摘空"伪装成成功。
+        // 判据是<b>集合差</b>（当前参与者 − 归一后入参），不是入参条数，否则混入非参与者 id 就能绕过。
+        var toDelete = new List<string>();
+        var remaining = 0;
+        foreach (var row in current)
+        {
+            var normalized = PageQuery.NormalizeActorValue(row);
+            if (normalized == null) continue;   // 历史脏行：既不匹配也不算"一个人"
+            if (targets.Contains(normalized)) toDelete.Add(row);
+            else remaining++;
+        }
+        if (toDelete.Count > 0 && remaining == 0) return Error("至少需保留一名参与人");
+        // 【语义 7】幂等：actors 里不属于本任务参与者的人静默忽略（不报错），一个都没命中 ⇒ 空操作、
+        // 成功信封（前端双点、集成层重放第二次不再报错）。要"人不在任务里就报错"请用 transfer。
+        if (toDelete.Count > 0) await _repository.RemoveTaskActorAsync(taskId!.Value, toDelete);
+        return Ok();
+    }
+
     private async Task<Dictionary<string, object?>> TaskLatestAsync(FlowData args)
     {
         var instanceId = ToLong(args.GetObj(FlowConst.ProcessInstanceIdKey));
