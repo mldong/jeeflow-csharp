@@ -102,8 +102,10 @@ app.MapPost("/wf/{**action}", async (string action, HttpRequest req) =>
     }
     catch (Exception e)
     {
-        Console.Error.WriteLine($"[jeeflow-csharp demo] body 解析失败: {e.Message} body={Truncate(body, 500)}");
-        return Results.Json(new { code = 99999999, msg = "请求体解析失败: " + e.Message });
+        // issues/137 §3-1（spec 06 §2.12）：解析器原文（System.Text.Json 的行列号/字节值）只进 stderr，
+        // 不进对外 msg——宿主自己写的「请求体解析失败」这句留着，尾巴上的 e.Message 去掉。
+        Console.Error.WriteLine($"[jeeflow-csharp demo] body 解析失败: {e} body={Truncate(body, 500)}");
+        return Results.Json(new { code = 99999999, msg = "请求体解析失败" });
     }
     try
     {
@@ -112,9 +114,11 @@ app.MapPost("/wf/{**action}", async (string action, HttpRequest req) =>
     }
     catch (Exception e)
     {
-        // 门面外异常兜底：契约信封不裸奔
+        // 门面外异常兜底：契约信封不裸奔。issues/137 §3-1：门面自己已经在顶层 catch 里判过归属，
+        // 能漏到这一层的只剩宿主/出口序列化那一族（全是内部实现细节）⇒ 用与门面同一条固定文案
+        // （JeeflowFacade.InternalFailureMsg，八栈逐字同串），原文连同栈只进 stderr。
         Console.Error.WriteLine($"[jeeflow-csharp demo] action={action} 异常: {e}");
-        return Results.Json(new { code = 99999999, msg = e.Message });
+        return Results.Json(new { code = 99999999, msg = "流程处理失败" });
     }
 });
 

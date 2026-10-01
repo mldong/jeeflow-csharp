@@ -6,4 +6,9 @@
     <ProjectReference Include="..\Mldong.Jeeflow.Core\Mldong.Jeeflow.Core.csproj" />
     <ProjectReference Include="..\Mldong.Jeeflow.Persist\Mldong.Jeeflow.Persist.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- issues/137 §3-1：出口判别式与日志钩子取 internal（公开 API 面不扩成员），
+         测试要能直取纯函数与取证钩子——与 Core.csproj 同一姿势 -->
+    <InternalsVisibleTo Include="Mldong.Jeeflow.Tests" />
+  </ItemGroup>
 </Project>

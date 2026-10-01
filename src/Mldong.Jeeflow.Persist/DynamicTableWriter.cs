@@ -275,7 +275,14 @@ public class DbDynamicTableWriter : IDynamicTableWriter
         }
         catch (Exception e)
         {
-            throw new JeeflowException($"读取表结构失败: {tableName} -> {e.Message}");
+            // issues/137 §3-1（spec 06-facade.md §2.12）**构造层腿**：JeeflowException 属契约异常族，
+            // 门面判别式第 2 条会把它**逐字**透出 ⇒ 拼在文案尾巴上的驱动原文
+            // （SQLSTATE／Access denied／连接被拒一类）会一路进用户面 msg，出口层挡不住。
+            // 改成契约文案 ＋ 表名保持不变、驱动原文只进 InnerException（cause 分离，与
+            // <c>ModelParser</c>「读取流程定义 JSON 失败」同姿势），另按本仓惯例落一条 stderr WARNING
+            // （Persist 层拿不到 ServiceContext.LogWarning——它是 Core internal）。
+            Console.Error.WriteLine("[jeeflow] WARN 读取表结构失败：" + e);
+            throw new JeeflowException(-1, $"读取表结构失败: {tableName}", e);
         }
         return meta;
     }

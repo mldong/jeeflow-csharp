@@ -15,6 +15,20 @@ public partial class JeeflowFacade
     private const int OkCode = 0;
     private const int ErrCode = 99999999;
 
+    /// <summary>
+    /// issues/137 §3-1（spec 06-facade.md §2.12）：门面捕获到**非引擎契约异常**时，对外只说这一句。
+    /// owner 2026-10-02 第 3 问拍 A ⇒ 第八条逐字契约文本，**八栈同一串、不许改措辞**
+    /// （java <c>INTERNAL_FAILURE_MSG</c>／php <c>INTERNAL_FAILURE_MSG</c>／python
+    /// <c>INTERNAL_FAILURE_MSG</c>／node <c>INTERNAL_FAILURE_MSG</c> 同名同值，可跨栈 grep 互查）。
+    /// </summary>
+    internal const string InternalFailureMsg = "流程处理失败";
+
+    /// <summary>引擎主命名空间前缀（判别式第 5 条「抛出点在不在引擎里」用；对齐 java <c>com.mldong.jeeflow.</c>）。</summary>
+    private const string EngineNamespacePrefix = "Mldong.Jeeflow.";
+
+    /// <summary>测试桩命名空间前缀（判别式第 5 条排除项；对齐 java 排除 <c>com.mldong.jeeflow.test.</c>）。</summary>
+    private const string TestNamespacePrefix = "Mldong.Jeeflow.Tests.";
+
     private static readonly List<int> DefaultStateIn = new() { 10, 20, 30, 40, 45, 50 };
     private static readonly int DefaultStatsLimit = 10;
     private static readonly HashSet<string> ValidGranularity = new() { "hour", "day", "week", "month" };
@@ -111,9 +125,228 @@ public partial class JeeflowFacade
         }
         catch (Exception e)
         {
-            return Error(e.Message ?? e.ToString());
+            // issues/137 §3-1（spec 06-facade.md §2.12）：判别规则与理由见 IsForeignDetail——引擎自己写的
+            // 中文契约文案照旧**逐字**透出（其余七栈、十三个集成壳与前端 toast 都按原文对齐，在这条上收窄
+            // 就是静默改契约面），只把运行时／反射／IO／驱动／JSON 解析器／集成方 provider 写的原文换成
+            // 固定文案 InternalFailureMsg。原文只进**日志与 InnerException**（cause 分离，对齐 java
+            // `log.log(Level.SEVERE, …, e)` 与 php `logInternalFailure(…, new JeeflowException(msg, code, $e))`），
+            // 不得拼进 msg 或任何其它对外字段。
+            //
+            // 旧形状 `return Error(e.Message ?? e.ToString());` 是本栈主泄漏点（启动词 §2-B 点名那条）：
+            // 任何异常的 Message 都原样外透。⚠️ 且 `?? e.ToString()` 这一腿在 .NET 里其实是**死码**——
+            // `Exception.Message` 永不为 null（无 message 时框架回落成"Exception of type 'X' was thrown."／
+            // 本地化"发生类型为“X”的异常。"），所以真正会外透的兜底文案**本身就带着类型全名**；
+            // 判别式第 1 条因此除了判空白，还要判"文案里带自己类型全名"这一档（java `message == null` 的对偶）。
+            if (IsForeignDetail(e))
+            {
+                LogInternalFailure(action, new Exception(InternalFailureMsg, e));
+                return Error(InternalFailureMsg);
+            }
+            return Error(e.Message);
         }
     }
+
+    // ═══ 内部异常出口判别式（issues/137 §3-1 · spec 06-facade.md §2.12）═══
+
+    /// <summary>
+    /// 判「这条异常的 message 能不能原样进出口 <c>msg</c>」——**纯静态函数**，四个入参全是已经抽好的值
+    /// （类型／文案／cause／栈文本），不碰异常对象、不产生副作用 ⇒「文案判据」与「记日志那一半副作用」
+    /// （<see cref="LogInternalFailure"/>）可以各自单测（spec §2.12「判据形状」硬要求）。
+    /// 参考实现＝java <c>JeeflowFacade.isForeignDetail(type, message, cause, trace)</c>；
+    /// 名字按 .NET PascalCase 直译（<c>isForeignDetail</c> ↔ <c>IsForeignDetail</c>，八栈可 grep 互查）。
+    ///
+    /// <para><b>不能简单收窄成「只透 <see cref="JeeflowException"/>」</b>——本栈 2026-10-02 现读普查
+    /// （<c>src/</c> 下全部 41 处抛出点，按异常类型分类）：35 处走 <see cref="JeeflowException"/>
+    /// （本栈**有**专门契约异常类型，<c>Core/Error/JeeflowException.cs</c>），但另有**裸异常腿**携带
+    /// 引擎自己写的中文文案：<see cref="InvalidOperationException"/>「未支持的分页行类型: X」
+    /// （本文件 <c>PageResultOut</c>）与 <see cref="ArgumentOutOfRangeException"/>
+    /// 「workerId 必须在 [0,1023]」（<c>AtomicIdGenerator</c> 构造守卫）。
+    /// 前者就在门面程序集里、抛出点是引擎 ⇒ 与 java 的 <c>ext()</c> 裸 ISE 同形状，收窄成"只透契约类型"
+    /// 会把它改写成固定文案而没人报警（后者只在装配期触发、从 <c>FlowAsync</c> 不可达，其取舍见
+    /// <see cref="RuntimeInternal"/> 的注释与测试 <c>ArgumentValidationSubtypesAreForeignButTheBaseTypeIsNot</c>）。
+    /// 所以按「这段文案是谁写的」判，五条（顺序即优先级，
+    /// 返回 <c>true</c> ⇒ 属内部信息 ⇒ 出口只给 <see cref="InternalFailureMsg"/>）：</para>
+    /// <list type="number">
+    ///   <item><description><c>message</c> 为 null／空白，<b>或</b>是框架兜底那句带类型全名的文案
+    ///     ⇒ 内部（java 第 1 条 <c>message == null</c> 的 .NET 对偶：本栈 <c>Message</c> 永不为 null，
+    ///     兜底会吐 <c>System.XxxException</c> 全名，一样是内部信息）；</description></item>
+    ///   <item><description>属**契约异常族**（<see cref="JeeflowException"/> 及其子类）⇒ 引擎自己写的
+    ///     契约文案，<b>逐字透出</b>（本条返回 <c>false</c>）；</description></item>
+    ///   <item><description><c>message</c> 恰等于 cause 的原文／字符串化 ⇒ 内部（裸包装只是搬运下层原文，
+    ///     引擎没写过它。java 对偶＝<c>message.equals(String.valueOf(cause))</c>；.NET 的
+    ///     <c>cause.ToString()</c> 还拖着栈，故三种写法都认：<c>cause.Message</c>、
+    ///     <c>"{FullName}: {Message}"</c>、<c>cause.ToString()</c>）；</description></item>
+    ///   <item><description>属运行时／反射／IO／驱动／JSON 解析器自己抛的族 ⇒ 内部
+    ///     （见 <see cref="RuntimeInternal"/>）；</description></item>
+    ///   <item><description>抛出点不在引擎主命名空间（BCL、集成方 provider、测试桩）⇒ 内部
+    ///     （见 <see cref="ThrownInsideEngine"/>；引擎没写过的文案一律不外透）。</description></item>
+    /// </list>
+    /// </summary>
+    /// <param name="type">异常类型（<c>e.GetType()</c>）</param>
+    /// <param name="message">异常文案（<c>e.Message</c>；.NET 下不为 null，但可为空白）</param>
+    /// <param name="cause">下层异常（<c>e.InnerException</c>，可为 null）</param>
+    /// <param name="stackTrace">栈文本（<c>e.StackTrace</c>，可为 null／空——未真抛出过时即空）</param>
+    /// <returns>true ⇒ 属内部信息，出口只给固定文案</returns>
+    internal static bool IsForeignDetail(Type type, string? message, Exception? cause, string? stackTrace)
+    {
+        // ① 没有可用文案，或文案就是"吐类型名"的框架兜底
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return true;
+        }
+        if (type.FullName is { Length: > 0 } fullName && message!.IndexOf(fullName, StringComparison.Ordinal) >= 0)
+        {
+            return true;
+        }
+
+        // ② 契约异常族 ⇒ 逐字透出
+        if (typeof(JeeflowException).IsAssignableFrom(type))
+        {
+            return false;
+        }
+
+        // ③ 裸包装：message 只是把下层原文搬上来
+        if (cause is not null)
+        {
+            var causeText = cause.Message;
+            var causeString = cause.GetType().FullName + ": " + causeText;   // java String.valueOf(cause) 的对偶
+            if (message == causeText || message == causeString || message == cause.ToString())
+            {
+                return true;
+            }
+        }
+
+        // ④ 运行时／反射／IO／驱动／解析器自己抛的族
+        if (RuntimeInternal(type))
+        {
+            return true;
+        }
+
+        // ⑤ 抛出点不在引擎主命名空间
+        return !ThrownInsideEngine(stackTrace);
+    }
+
+    /// <summary>
+    /// 抽取层（**零判据逻辑**，对齐 python <c>foreign_detail_of</c>）：把活异常对象拆成四元组喂给
+    /// <see cref="IsForeignDetail(Type, string?, Exception?, string?)"/>。.NET 没有 java
+    /// <c>StackTraceElement[]</c> 那种结构化栈帧，第 5 条按 <c>e.StackTrace</c> 文本判归属
+    /// （<c>e.TargetSite</c> 在异步/Release 内联下不可靠，故不用它）。
+    /// </summary>
+    internal static bool IsForeignDetail(Exception e) =>
+        e is null || IsForeignDetail(e.GetType(), e.Message, e.InnerException, e.StackTrace);
+
+    /// <summary>
+    /// 由运行时／反射层／IO 层／驱动／JSON 解析器构造的异常族（其 message 一律是内部信息）——
+    /// java <c>jvmInternal</c> 的本栈等价类型，按 spec §2.12 第 4 条族清单逐条对齐。
+    /// ⚠️ 引擎拿来当**契约文案载体**的类型不在此族：<see cref="InvalidOperationException"/>
+    /// （门面 <c>PageResultOut</c> 的「未支持的分页行类型: X」）与 <c>ArgumentException</c> <b>基类</b>
+    /// （java 同样把 <c>RuntimeException</c>/<c>ISE</c>/<c>IAE</c> 排除在外）。
+    /// 但它的两个**具体子类型**（<see cref="ArgumentNullException"/>／
+    /// <see cref="ArgumentOutOfRangeException"/>）在族里——见下面那一行的理由。
+    /// </summary>
+    private static bool RuntimeInternal(Type type) =>
+        // 空引用／类型转换／格式化／越界／算术（java NPE、ClassCastException、NumberFormatException、
+        // IndexOutOfBounds、ArithmeticException 的对偶；OverflowException 与 DivideByZeroException
+        // 都继承 ArithmeticException ⇒ 一并收在这一条）
+        typeof(NullReferenceException).IsAssignableFrom(type)
+        || typeof(InvalidCastException).IsAssignableFrom(type)
+        || typeof(FormatException).IsAssignableFrom(type)
+        || typeof(ArithmeticException).IsAssignableFrom(type)
+        || typeof(IndexOutOfRangeException).IsAssignableFrom(type)
+        // 参数校验两子型进族、ArgumentException 基类不进——按**本栈普查结论**定，不照抄 java 清单
+        // （java 排除整个 IAE 族是因为它有约十处拿 IAE/ISE 携带中文契约文案；本栈 41 处抛出点里
+        //  ArgumentNullException 4 处全是 `?? throw new ArgumentNullException(nameof(x))` 构造守卫、
+        //  ArgumentOutOfRangeException 1 处是 AtomicIdGenerator 的 workerId 守卫，两者的文案
+        //  都由框架生成或只在**装配期**触发，从 FlowAsync 不可达）⇒ 它们从来不是契约文案载体，
+        //  而 BCL 自己抛出来的这两型文案永远是英文内部细节（"Value cannot be null. (Parameter 'x')"），
+        //  按 §2.12 第 5 条的原则「引擎没写过的文案一律不外透」，交给第 4 条兜住更稳
+        //  （BCL 的 ThrowHelper 有 [StackTraceHidden]，第 5 条的栈顶帧归属对这一族可能失效）。
+        || typeof(ArgumentNullException).IsAssignableFrom(type)
+        || typeof(ArgumentOutOfRangeException).IsAssignableFrom(type)
+        // 进程级致命错（java StackOverflowError／VirtualMachineError 的对偶；StackOverflow 在 .NET
+        // 实际捕不到——进程直接死，列上是为"一族齐"，OutOfMemory 捕得到）
+        || typeof(StackOverflowException).IsAssignableFrom(type)
+        || typeof(OutOfMemoryException).IsAssignableFrom(type)
+        || typeof(InsufficientMemoryException).IsAssignableFrom(type)
+        // 程序集加载／反射（java LinkageError／ReflectiveOperationException 的对偶。.NET 没有单一
+        // 反射基类 ⇒ 逐个点名 ＋ 兜整个 System.Reflection 命名空间）
+        || typeof(TypeLoadException).IsAssignableFrom(type)              // 含 EntryPointNotFoundException
+        || typeof(TypeInitializationException).IsAssignableFrom(type)
+        || typeof(MissingMemberException).IsAssignableFrom(type)         // 含 MissingMethod/MissingFieldException
+        || typeof(BadImageFormatException).IsAssignableFrom(type)
+        || typeof(System.Reflection.TargetInvocationException).IsAssignableFrom(type)
+        || typeof(System.Reflection.ReflectionTypeLoadException).IsAssignableFrom(type)
+        || typeof(System.Reflection.TargetParameterCountException).IsAssignableFrom(type)
+        || typeof(System.Reflection.AmbiguousMatchException).IsAssignableFrom(type)
+        || (type.Namespace?.StartsWith("System.Reflection", StringComparison.Ordinal) ?? false)
+        // IO／网络（java IOException 的对偶；含 FileNotFoundException／DirectoryNotFoundException／
+        // EndOfStreamException。java 的 SocketException 继承 IOException，.NET 不继承 ⇒ 单列）
+        || typeof(IOException).IsAssignableFrom(type)
+        || typeof(System.Net.Sockets.SocketException).IsAssignableFrom(type)
+        // 驱动（java SQLException 的对偶；MySqlConnector 的 MySqlException 继承 DbException ⇒ 一族全收，
+        // 断言见 FacadeInternalErrorNoLeak137Tests.DriverExceptionFamilyIsCovered）
+        || typeof(System.Data.Common.DbException).IsAssignableFrom(type)
+        // JSON 解析器（spec §2.12 点名的 `'0xE8' is an invalid start of a property …` 那一族）
+        || typeof(System.Text.Json.JsonException).IsAssignableFrom(type)
+        // 运行时包装（java UndeclaredThrowableException 的对偶；.NET 的 AggregateException 文案里
+        // 直接嵌着各 inner 的原文，同样是引擎没写过的搬运文案）
+        || typeof(AggregateException).IsAssignableFrom(type);
+
+    /// <summary>
+    /// 栈顶帧是否落在引擎主命名空间（排除测试桩：<c>Mldong.Jeeflow.Tests.</c> 抛的不算引擎契约文案，
+    /// 对齐 java <c>thrownInsideEngine</c> 排除 <c>com.mldong.jeeflow.test.</c>）。
+    /// .NET 栈帧序与 java <c>getStackTrace()</c> 同序（内层→外层），故取第一条 <c>at</c> 帧即抛出点；
+    /// 异步重抛插进来的 <c>--- End of stack trace from previous location ---</c> 分隔行在**后面**，不影响。
+    /// 空／null 栈（异常只是被构造、没真抛出过）⇒ 判不出归属 ⇒ 按"不在引擎里"（与 java 同口径，偏保守）。
+    /// </summary>
+    private static bool ThrownInsideEngine(string? stackTrace)
+    {
+        if (string.IsNullOrWhiteSpace(stackTrace))
+        {
+            return false;
+        }
+        foreach (var raw in stackTrace!.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0) continue;
+            var symbol = line.StartsWith("at ", StringComparison.Ordinal) ? line[3..] : line;
+            var paren = symbol.IndexOf('(');          // 去掉参数列表；异步状态机形态 `<X>d__1.MoveNext` 同样成立
+            if (paren >= 0) symbol = symbol[..paren];
+            return symbol.StartsWith(EngineNamespacePrefix, StringComparison.Ordinal)
+                && !symbol.StartsWith(TestNamespacePrefix, StringComparison.Ordinal);
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 内部失败的**唯一副作用出口**：原文只进日志与 <paramref name="wrapped"/> 的
+    /// <see cref="Exception.InnerException"/>，绝不进 <c>msg</c> 或任何其它对外字段。
+    /// 生产出口＝stderr（本栈 Core/Facade 零第三方依赖、没有 ILogger，既有惯例是
+    /// <c>Console.Error.WriteLine("[jeeflow] …")</c>，见 <c>ActionsExt.BizDataAsync</c>／
+    /// <c>ServiceContext.LogWarning</c>／<c>SurrogateApplier</c>）。
+    /// </summary>
+    /// <param name="action">出事的 action（java 日志同款：<c>"jeeflow action 执行失败: action=" + action</c>）</param>
+    /// <param name="wrapped">固定文案 ＋ 原异常作 inner 的包装件（<c>new Exception(InternalFailureMsg, e)</c>）；
+    /// <c>ToString()</c> 里带着原文＋类型＋内外两层栈，等价 java <c>log.log(SEVERE, msg, e)</c> 的 cause 分离</param>
+    private void LogInternalFailure(string? action, Exception wrapped)
+    {
+        var line = $"[jeeflow] ERROR action 执行失败: action={action}";
+        if (InternalFailureSinkForTest is { } sink)
+        {
+            sink(line, wrapped);
+            return;
+        }
+        Console.Error.WriteLine(line + Environment.NewLine + wrapped);
+    }
+
+    /// <summary>
+    /// <b>internal 测试取证钩子</b>（对齐本仓 <c>ServiceContext.WarningSinkForTest</c> 的一贯姿势：
+    /// 公开 API 面不因此扩成员，靠 <c>InternalsVisibleTo</c> 给测试）。设了它，
+    /// <see cref="LogInternalFailure"/> 只把「日志行 ＋ 带 inner 的包装件」递交给钩子、不再打 stderr。
+    /// 存在的理由＝spec §2.12 要求"文案判据与副作用各自可测"：只断言 <c>msg</c> 等于固定文案的话，
+    /// "把原文整个丢掉"也能绿，判据没有牙。实例级（非静态）⇒ xunit 跨类并行零串扰。
+    /// </summary>
+    internal Action<string, Exception>? InternalFailureSinkForTest { get; set; }
 
     /// <summary>统一入口（契约 JSON 出口——经 Outbound 递归 stringifier）。</summary>
     public async Task<string> FlowJsonAsync(string? action, FlowData args) =>
