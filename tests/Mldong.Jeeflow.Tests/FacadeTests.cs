@@ -58,7 +58,7 @@ public class FacadeTests : IDisposable
         return inst.InstanceId.Value;
     }
 
-    /// <summary>40+ action dispatch 全覆盖（manifest 46 条）：任意载荷不落 default（否则 msg 含"未知 action"）。</summary>
+    /// <summary>全 action dispatch 覆盖（manifest 47 条）：任意载荷不落 default（否则 msg 含"未知 action"）。</summary>
     [Fact]
     public async Task AllActionsInManifest_Dispatch_NoUnknown()
     {
@@ -80,9 +80,11 @@ public class FacadeTests : IDisposable
                 count++;
             }
         }
-        // issues/115：processTask/transfer 补录后清单 45→46（本断言即 manifest ↔ 分派表一致性门禁：
-        // 清单漏记 → 该 action 不被 dispatch 覆盖；分派表漏记 → 落 unknown 分支直接红）
-        Assert.Equal(46, count);
+        // issues/115：processTask/transfer 补录后清单 45→46；批二 §3-8 补第 47 个 action
+        // processTask/removeTaskActor 后 46→47（owner 2026-10-01 拍 A：条数断言随代次前进，
+        // 本断言即 manifest ↔ 分派表一致性门禁：清单漏记 → 该 action 不被 dispatch 覆盖；
+        // 分派表漏记 → 落 unknown 分支直接红）
+        Assert.Equal(47, count);
     }
 
     private static string FindManifestPath()

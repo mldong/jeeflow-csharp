@@ -2,14 +2,14 @@
   "_meta": {
     "version": "1.0",
     "created": "2026-09-06",
-    "purpose": "jeeflow C# 引擎（第 8 语言）M0 契约固化 —— 46 action 清单（Java 实查 ↔ 规范 ↔ MoonBit manifest ↔ C# 四方核对基准）",
+    "purpose": "jeeflow C# 引擎（第 8 语言）M0 契约固化 —— 47 action 清单（第 47 条＝issues/115 processTask/removeTaskActor，批二 §3-8）（Java 实查 ↔ 规范 ↔ MoonBit manifest ↔ C# 四方核对基准）",
     "sources": {
       "java": "jeeflow-java/jeeflow-core/src/main/java/com/mldong/jeeflow/facade/JeeflowFacade.java flow() switch（L100-L155）",
       "spec": "jeeflow-doc/docs/spec/06-facade.md",
       "plan": "jeeflow-hub/docs/moonbit-engine-implementation-plan.md §0.1/§3.3/§4",
       "moon_manifest": "jeeflow-moon/docs/action-manifest.json（双 diff 基线，2026-09-05 与 Java diff 为空）"
     },
-    "count": 46,
+    "count": 47,
     "baseline": {
       "note": "spec 基线锚定（方案 §5 M0 通过条件）——每阶段收尾复核上游漂移",
       "java_head": "b7ef670 chore(release): v1.8.27",
@@ -27,7 +27,7 @@
       "checker": "scripts/check-action-manifest.mjs（本仓，M0 gate 复跑入口）",
       "java_vs_moon_manifest": "PASS — 45/45 无差集（2026-09-05 moon M0 产物，本次复用）",
       "java_vs_csharp_impl": "PENDING — M3 facade 45 action 落地后复跑（c01-c45 action 清单核对）",
-      "csharp_vs_java_after_113_116": "PASS — 46/46 无差集：Java 侧 issues/115 新增 processTask/transfer 后本清单同步补录（2026-09-21 逐 action 对照 jeeflow-java JeeflowFacade.flow() switch），processTask 组 9→10"
+      "csharp_vs_java_after_113_116": "PASS — 47/47 无差集（批二 §3-8 补 issues/115 第 47 个 action 后重跑逐 action 对照）；历史：46/46 无差集：Java 侧 issues/115 新增 processTask/transfer 后本清单同步补录（2026-09-21 逐 action 对照 jeeflow-java JeeflowFacade.flow() switch），processTask 组 9→10"
     },
     "shared_contracts": {
       "envelope": "恒 {code,msg,data}；成功 code=0 msg=成功；失败 code=99999999（只发明 99999999，不发明 9999xxxx）；未知 action → {code:99999999}",
@@ -294,6 +294,14 @@
           "resp": "ok；data=null；失败 99999999 + msg：operator 必填 / fromActor 必填 / toActor 必填 / 无权限转办该任务 / 原办理人不是该任务参与人 / 目标人已是该任务参与人 / 任务非进行中，不可转办"
         },
         {
+          "action": "processTask/removeTaskActor",
+          "method": "taskRemoveActor",
+          "permission": "wf:processTask:removeTaskActor",
+          "note": "issues/115 摘人（只摘不加），区别于 transfer 的摘 A 加 B、也区别于 surrogate/addCandidate 的只加：**零留痕、不发事件、不写任务变量**（spec §11.3 事件集里没有「摘人」码）；归属值走 spec 06 §2.11 同一枚单点（逐元素 trim＋丢空，'0'/'00'/'a' 是三张脸不是空值）；processTaskId 另判一档（缺键/空串/0/负数 → processTaskId/actorIds 缺失）；守卫次序钉死：operator 必填 → 缺参数 → 任务不存在 → 无权限 → 非进行中 → 至少留一名参与人；非参与者静默忽略＝幂等（重复摘同一人第二次仍成功，要「人不在就报错」请用 transfer）；语义 6：匹配取归一值、DELETE 喂**行上的原值**（⚠️ php/csharp/moon 三栈仓储删除侧再过一遍归一 ⇒ 该腿在这三栈仅名义成立，owner 裁定挂 issues/137 §H/115 台账）；msg 跨栈逐字统一",
+          "req": "{processTaskId, actorIds（数组或逗号串）, operator 硬必填（不接受缺省、不回落 user1）}",
+          "resp": "ok；data=null；失败 99999999 + msg：operator 必填 / processTaskId/actorIds 缺失 / 任务不存在 / 无权限摘除该任务参与人 / 任务非进行中，不可摘除参与人 / 至少需保留一名参与人"
+        },
+        {
           "action": "processTask/latest",
           "method": "taskLatest",
           "permission": null,
@@ -425,11 +433,11 @@
     }
   },
   "summary": {
-    "total": 46,
+    "total": 47,
     "byGroup": {
       "processDefine": 8,
       "processInstance": 14,
-      "processTask": 10,
+      "processTask": 11,
       "processDesign": 9,
       "processSurrogate": 5
     },
