@@ -294,7 +294,12 @@ public partial class JeeflowFacade
         }
         catch (Exception e)
         {
-            return Error("业务数据读取失败: " + (e.InnerException?.Message ?? e.Message));
+            // issues/137-G 同族（java `JeeflowFacade.java` 的 bizData 腿逐字同形）：出口只给固定文案，
+            // 反射/驱动原文只进 stderr。旧形状把 `InnerException.Message` 拼进 msg ⇒ 内部详情进用户面。
+            // 本栈 Core 零第三方依赖（没有 ILogger），惯例是 stderr；`ServiceContext.LogWarning` 是
+            // internal（仅对 Tests 开 InternalsVisibleTo），Facade 程序集取不到 ⇒ 用同一前缀直写。
+            Console.Error.WriteLine("[jeeflow] WARN 业务数据读取失败：" + e);
+            return Error("业务数据读取失败");
         }
     }
 

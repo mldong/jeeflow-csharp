@@ -53,7 +53,24 @@ public static class ModelParser
         {
             throw new JeeflowException("读取流程定义 JSON 失败");
         }
-        if (json.FromJson(jsonStr) is not Dictionary<string, object?> root)
+        Dictionary<string, object?>? root;
+        try
+        {
+            root = json.FromJson(jsonStr) as Dictionary<string, object?>;
+        }
+        catch (Exception e)
+        {
+            // issues/137-G／139 的 c# 主腿：这里此前**没有** try/catch，System.Text.Json 的原文
+            // （带行列号，如 "'{' is invalid after a value..."）会一路冒到门面顶层
+            // `JeeflowFacade.cs` 的 `Error(e.Message)` ⇒ 内部详情直接进用户面 msg。
+            // 改成与上面两档同一条 java 逐字基准文案，原文交 LogWarning 落 stderr（cause 分离）。
+            // 注：**不在 DefaultJsonProvider 里兜**——那是全栈共用的 JSON SPI（变量、设计 content 等
+            // 都走它），把"读取流程定义 JSON 失败"写进 provider 会误标别的调用方。
+            context.LogWarning("读取流程定义 JSON 失败：" + e);
+            throw new JeeflowException(-1, "读取流程定义 JSON 失败", e);
+        }
+        if (root is null)
+            // 合法 JSON 但不是对象（`[]`／`null`／裸标量）：保持既有形状——给空模型，不报错。
             return new ProcessModel();
         return Parse(root, context);
     }
