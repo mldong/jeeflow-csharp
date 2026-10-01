@@ -98,6 +98,54 @@ public class PageQuery
     }
 
     /// <summary>
+    /// <b>归属值删除腿展开</b>（issues/137 §3-6 · spec 06-facade.md §processTask/removeTaskActor 语义 6，
+    /// owner 2026-10-02 拍「两形并集」）：把待删列表展开成 <c>DELETE ... actor_id IN (...)</c> 真正要
+    /// 绑定/匹配的值——<b>空值一律丢弃，非空值同时保留「原值」与「trim 值」两形</b>（保序、按字面去重）。
+    /// <para><b>判据本体仍只有 <see cref="NormalizeActors(IEnumerable{string?})"/> 那一枚</b>：本方法把
+    /// <b>单个元素</b>喂给它——返回空集合 ⇒ 该元素是空值（<c>null</c>/<c>""</c>/纯空白）⇒ 丢弃；
+    /// 返回单元素 ⇒ 那个元素就是 trim 形。<b>不在这里抄第二份 trim/判空</b>
+    /// （spec §2.11 尾注「不要再抄第二份，两份判据迟早分叉」明令；moon 腿 <c>actor_delete_forms</c> 同款做法）。</para>
+    /// <para><b>为什么必须两形、只取一头各有一种假成功</b>（1.8.36 之前八栈正好分成这两派，没有一处两全）：</para>
+    /// <list type="bullet">
+    ///   <item><description>只取 <b>trim 形</b>（本栈 <c>MemoryRepository</c>／<c>MySqlRepository</c> 删除腿
+    ///     与 php/rust/moon 的旧形状）⇒ 门面按语义 6 交出的历史脏行原值 <c>" 9101 "</c> 被削成 <c>9101</c>，
+    ///     真库（MySQL NO PAD 排序规则）下那一行删不掉，门面却报成功——<b>被摘的人待办还在</b>；</description></item>
+    ///   <item><description>只取 <b>原值形</b>（go/node/python/java 的旧形状）⇒ 第三方绕过门面直连仓储传
+    ///     <c>" 8601 "</c> 时删不掉写侧归一后落库的规范行 <c>8601</c>（issues/142 §9.2 那一路）；
+    ///     且空值照喂 <c>DELETE</c>，会把历史 <c>actor_id=''</c> 脏行批量误删（替脏数据做掉唯一痕迹）。</description></item>
+    /// </list>
+    /// <para>两形并集同时满足两侧：脏行按原值命中、规范行按 trim 形命中。按 §2.11 归一口径
+    /// <c>" 9101 "</c> 与 <c>9101</c> 本就是<b>同一个人</b>，两行都删掉才是"摘掉这个人"的正确结果，不构成误删。
+    /// 去重按<b>字面</b>做（<see cref="List{T}.Contains(T)"/> 默认 <c>StringComparer.Ordinal</c>），
+    /// <b>不</b>按"trim 后相同"折叠原值形：<c>" 9101 "</c> 与 <c>"  9101  "</c> 是两种不同的原值形，都要保留
+    /// （库里可能正是其中任一种脏法）。</para>
+    /// <para><b>反向哨兵</b>同 <see cref="NormalizeActors(IEnumerable{string?})"/>：判空一律 trim 后判长，
+    /// 严禁语言自带的假值判据——<c>"0"</c> 是合法 id 必须留下，且 <c>"0"</c> 与 <c>"00"</c> 是<b>两个人</b>
+    /// （严禁松散比较把第二个静默折叠）。</para>
+    /// <para><b>与写侧义务 <see cref="IProcessRepository.AddTaskActorAsync"/> 不同、别照抄</b>：写侧落库只取
+    /// trim 形（同一人不得落两行）；删除腿多带一份原值，才删得掉修复前落下的未 trim 历史脏行。</para>
+    /// </summary>
+    /// <param name="raw">待删归属值集合，元素可为 <c>null</c>（<c>null</c> 丢弃，<b>不得</b>串化成 <c>"null"</c>）。</param>
+    /// <returns>展开后的删除值列表（保序、按字面去重、无空值）；入参为 <c>null</c> 或全为空值时返回<b>空列表</b>
+    /// ——调用方据此<b>早退，一条 <c>DELETE</c> 都不发</b>（空列表不得退化成"清空该任务全部参与者"）。</returns>
+    public static List<string> ActorDeleteForms(IEnumerable<string?>? raw)
+    {
+        var outList = new List<string>();
+        if (raw == null) return outList;
+        foreach (var actorId in raw)
+        {
+            // 把单个元素喂给既有归一单点：返回空 ⇒ 空值（null/""/纯空白）⇒ 丢弃；返回 [t] ⇒ t 就是 trim 形。
+            // 判据本体只有 NormalizeActors 一枚，不在这里抄第二份 trim/判空（spec §2.11 尾注）。
+            var single = NormalizeActors(new[] { actorId });
+            if (single.Count == 0) continue;                          // ① 空值丢弃，不喂 DELETE
+            // 走到这里 actorId 必非 null（null 会被 NormalizeActors 丢成空集合），故下面的 ! 安全。
+            if (!outList.Contains(actorId!)) outList.Add(actorId!);   // ② 原值形：保住未 trim 的历史脏行
+            if (!outList.Contains(single[0])) outList.Add(single[0]); // ② trim 形：保住写侧归一后的规范行
+        }
+        return outList;
+    }
+
+    /// <summary>
     /// <b>旧名保留的转发</b>（issues/141 G10 落下的公开成员，已发布 NuGet 包 ⇒ 不删不改语义）：
     /// 判据本体已升格为通用的 <c>NormalizeActors</c>，
     /// cc 一支继续走同一枚（spec 06 §2.11「不要再抄第二份，两份判据迟早分叉」）。

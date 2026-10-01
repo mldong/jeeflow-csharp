@@ -468,24 +468,31 @@ public class MySqlRepository : IProcessRepository
     }
 
     /// <summary>
-    /// 参与者删除（issues/142 §9.2 第二批 · spec 06 §2.11 同一把尺子搬到删除位）：
-    /// 删除列表先过归属值判据单点 <see cref="PageQuery.NormalizeActors"/>（与内存仓同一枚）——
-    /// 不 trim 则「 8601 」删不掉库里的 8601；归一后为空 ⇒ <b>一条 DELETE 都不发</b>
-    /// （空串入参批量误删历史 <c>actor_id=''</c> 脏行）。与内存仓同一条判据、同一个答案。
+    /// 参与者删除（issues/137 §3-6 · spec 06 §processTask/removeTaskActor 语义 6「原值 ∪ trim 值」两形并集；
+    /// <b>与写侧 <see cref="AddTaskActorAsync"/> 的"只取 trim 形"不同，别照抄</b>）：
+    /// 删除列表先过删除腿单点 <see cref="PageQuery.ActorDeleteForms"/>（与内存仓同一枚）——空值一律丢弃、
+    /// 非空值同时以「原值」与「trim 值」两形进 <c>IN</c>（<c>IN</c> 占位符数量按并集条数算）。
+    /// <para>为什么不能只取一头（各有一种假成功）：① 只取 <b>trim 形</b>（本腿 1.8.36 之前的旧形状）
+    /// ⇒ 门面按语义 6 交出的历史脏行原值 <c>" 9101 "</c> 被削成 <c>9101</c>，真库（MySQL NO PAD 排序规则）下
+    /// 那一行删不掉而门面报成功（被摘的人待办还在）；② 只取 <b>原值形</b> ⇒ 第三方绕过门面直连仓储传
+    /// <c>" 8601 "</c> 时删不掉写侧归一后落库的规范行 <c>8601</c>（issues/142 §9.2 那一路，仍要对）。
+    /// 两形并集同时满足两侧：脏行按原值命中、规范行按 trim 形命中。</para>
+    /// <para>并集为空 ⇒ <b>一条 DELETE 都不发</b>（早退）——空串入参会批量误删历史 <c>actor_id=''</c> 脏行
+    /// （issues/129 那族的删除位对偶）。与内存仓同一条判据、同一个答案（issues/117 场景 27 那把尺子）。</para>
     /// </summary>
     public virtual async Task RemoveTaskActorAsync(long taskId, List<string> actors)
     {
-        var toRemove = PageQuery.NormalizeActors(actors);
-        if (toRemove.Count == 0) return;
+        var forms = PageQuery.ActorDeleteForms(actors);
+        if (forms.Count == 0) return;   // 并集为空 ⇒ 一条 DELETE 都不发（早退）
         await using var lease = await RentAsync();
-        var inList = string.Join(",", toRemove.Select((_, i) => $"@a{i}"));
+        var inList = string.Join(",", forms.Select((_, i) => $"@a{i}"));
         await ExecAsync(lease.Conn,
             $"DELETE FROM wf_process_task_actor WHERE process_task_id = ? AND actor_id IN ({inList})",
             cmd =>
             {
                 cmd.Parameters.Add(new MySqlParameter { Value = taskId });
-                for (var i = 0; i < toRemove.Count; i++)
-                    cmd.Parameters.Add(new MySqlParameter($"@a{i}", toRemove[i]));
+                for (var i = 0; i < forms.Count; i++)
+                    cmd.Parameters.Add(new MySqlParameter($"@a{i}", forms[i]));
             });
     }
 

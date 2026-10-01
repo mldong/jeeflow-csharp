@@ -125,13 +125,20 @@ public interface IProcessRepository
     Task AddTaskActorAsync(long taskId, List<string> actors);
 
     /// <summary>
-    /// 任务参与者摘除（issues/142 §9.2 第二批 · spec 06 §2.11 删除位与写侧同一条尺子）。
-    /// <para>实现方必须：① 删除列表先过归属值判据单点 <c>PageQuery.NormalizeActors</c>
-    /// （与 <see cref="AddTaskActorAsync"/> 同一枚，不另立尺子）——存量行是 trim 后的值、
-    /// 入参带空格时按原样比会静默不中（转办"摘原人"那一腿就落在这种静默失败上，报成功却没删）；
-    /// ② <b>归一后为空 ⇒ 一条都不删</b>（早退）——空串入参在历史 <c>actor_id=''</c> 的脏行上
-    /// 会批量误删（issues/129 那族的删除位对偶）。本栈两仓都按这一条实现，
-    /// 且在同一条判据上给同一个答案（issues/117 场景 27 那把尺子）。</para>
+    /// 任务参与者摘除（issues/137 §3-6 · spec 06 §processTask/removeTaskActor 语义 6「原值 ∪ trim 值」两形并集）。
+    /// <para><b>删除腿义务与写侧 <see cref="AddTaskActorAsync"/> 不同、别照抄</b>：写侧落库只取 trim 形
+    /// （同一人不得落两行）；删除腿必须做<b>三件事</b>——
+    /// ① <b>空值一律丢弃、不喂 <c>DELETE</c></b>（<c>null</c>／<c>''</c>／纯空白都不进 <c>IN</c>，
+    ///    否则历史 <c>actor_id=''</c> 脏行会被批量误删——那是替脏数据做掉唯一痕迹）；
+    /// ② <b>非空值同时以「原值」与「trim 值」两形进 <c>IN</c></b>（去重、保序；两形相同则只一份）——
+    ///    只取 trim 形则门面按语义 6 交出的历史脏行原值 <c>" 9101 "</c> 删不掉（真库 NO PAD 下报成功却没删，
+    ///    被摘的人待办还在），只取原值形则第三方绕过门面直连仓储传 <c>" 8601 "</c> 删不掉写侧归一后的规范行
+    ///    <c>8601</c>（issues/142 §9.2 那一路）；两形并集才两侧都满足；
+    /// ③ <b>并集为空 ⇒ 一条 <c>DELETE</c> 都不发</b>（早退，不退化成"清空该任务全部参与者"）。</para>
+    /// <para>判据本体复用既有归一单点旁挂的删除腿变体 <c>PageQuery.ActorDeleteForms</c>
+    /// （trim 与判空仍是 <c>PageQuery.NormalizeActors</c> 那一枚，<b>不抄第二份</b>，spec §2.11 尾注）。
+    /// 本栈两仓（内存 / MySQL）都按这一条实现，且在同一条判据上给同一个答案
+    /// （issues/117 场景 27 那把尺子）。</para>
     /// </summary>
     Task RemoveTaskActorAsync(long taskId, List<string> actors);
 

@@ -310,18 +310,26 @@ public class MemoryRepository : IProcessRepository
     }
 
     /// <summary>
-    /// 参与者删除（issues/142 §9.2 第二批 · spec 06 §2.11 同一把尺子搬到删除位）：
-    /// 删除列表先过归属值判据单点 <see cref="PageQuery.NormalizeActors"/>——
-    /// 不 trim 则「 8601 」删不掉库里 trim 后的 8601（静默 no-op 报成功）；
-    /// 归一后为空 ⇒ <b>什么都不删</b>（早退）——空串入参在历史 <c>actor_id=''</c> 脏行上
-    /// 会批量误删（issues/129 那族的删除位对偶）。与 MySQL 仓同一条判据、同一个答案。
+    /// 参与者删除（issues/137 §3-6 · spec 06 §processTask/removeTaskActor 语义 6「原值 ∪ trim 值」两形并集；
+    /// <b>与写侧 <see cref="AddTaskActorAsync"/> 的"只取 trim 形"不同，别照抄</b>）：
+    /// 删除列表先过删除腿单点 <see cref="PageQuery.ActorDeleteForms"/>——空值一律丢弃、
+    /// 非空值同时以「原值」与「trim 值」两形按<b>字面</b>匹配。
+    /// <para>为什么不能只取一头（各有一种假成功）：① 只取 <b>trim 形</b>（本腿 1.8.36 之前的旧形状）
+    /// ⇒ 门面按语义 6 交出的历史脏行原值 <c>" 9101 "</c> 被削成 <c>9101</c>，内存里那一行按字面比不中
+    /// ⇒ 删不掉而门面报成功（被摘的人待办还在）；② 只取 <b>原值形</b> ⇒ 第三方绕过门面直连仓储传
+    /// <c>" 8601 "</c> 时删不掉写侧归一后落库的规范行 <c>8601</c>（issues/142 §9.2 那一路，仍要对）。
+    /// 两形并集同时满足两侧：脏行按原值命中、规范行按 trim 形命中。</para>
+    /// <para>并集为空 ⇒ <b>什么都不删</b>（早退）——空串入参在历史 <c>actor_id=''</c> 脏行上会批量误删
+    /// （issues/129 那族的删除位对偶）。<c>ActorId</c> 为 <c>null</c> 的行不该被任何非空入参命中
+    /// （<c>forms</c> 里没有空值），故先判 <c>!= null</c> 再按字面比。与 MySQL 仓同一条判据、同一个答案
+    /// （issues/117 场景 27 那把尺子）。</para>
     /// </summary>
     public virtual Task RemoveTaskActorAsync(long taskId, List<string> actors)
     {
-        var toRemoveIds = PageQuery.NormalizeActors(actors);
-        if (toRemoveIds.Count == 0) return Task.CompletedTask;
+        var forms = PageQuery.ActorDeleteForms(actors);
+        if (forms.Count == 0) return Task.CompletedTask;   // 并集为空 ⇒ 一条都不删（早退）
         var toRemove = TaskActors.Values
-            .Where(a => a.ProcessTaskId == taskId && toRemoveIds.Contains(a.ActorId ?? ""))
+            .Where(a => a.ProcessTaskId == taskId && a.ActorId != null && forms.Contains(a.ActorId))
             .Select(a => a.Id)
             .ToList();
         foreach (var id in toRemove) TaskActors.Remove(id);
