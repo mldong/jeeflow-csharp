@@ -405,7 +405,14 @@ public class SurrogateAutoApplyTests
             ["operator"] = "leader", ["surrogate"] = "deputy", ["processName"] = "simple",
         });
         Assert.Equal(0, save["code"]);
-        var page = await facade.FlowAsync("processSurrogate/page", new FlowData { ["pageSize"] = 10 });
+        // issues/152 ② 改正既有期望（逐字交代）：这一句原来是不带 operator 的
+        //   `new FlowData { ["pageSize"] = 10 }` + `Assert.Single(rows)`，
+        // 靠的是"门面不注入归属 ⇒ page 返回全库台账"那个旧答案。page 现在自己注入
+        // t.operator EQ 归一后的 operator（spec 06 §2.5 表 + §4.5 归属不变式），
+        // 缺省档会归一到 user1 而这条台账的授权人是 leader ⇒ 0 行。
+        // 本用例的意图是"自动生效关掉后台账照查"，不是"page 不过滤"，故按新契约显式带归属人。
+        var page = await facade.FlowAsync("processSurrogate/page",
+            new FlowData { ["operator"] = "leader", ["pageSize"] = 10 });
         var rows = (List<object?>)((Dictionary<string, object?>)page["data"]!)["rows"]!;
         Assert.Single(rows);
         var row = (Dictionary<string, object?>)rows[0]!;
@@ -757,6 +764,165 @@ public class SurrogateAutoApplyTests
         Assert.Equal("deputyGlobal", hit?.Surrogate);
         var (_, taskId) = await StartToLeaderTaskAsync(h);
         Assert.Equal(new List<string> { "leader", "deputyGlobal" }, await PersistedActorsAsync(h, taskId));
+    }
+
+    // ═══ issues/152 · 委托：门面归属不变式（②）＋ 写侧 operator 三档归一（③ 那一族）＋ 作用域优先级（①）═══
+
+    /// <summary>审批人是 <c>user1</c> 的最小链（档 4 用：门面 save 不带 operator 时归一缺省就是 user1，
+    /// 只有以他为节点参与人建单，才验得出"这一行真能被本人后续待办命中"）。</summary>
+    private const string UserOneFlow = """
+        {"name": "i152-user1", "displayName": "I152User1", "type": "approval",
+         "nodes": [
+           {"id": "start", "type": "snaker:start", "text": {"value": "Start"}},
+           {"id": "apply", "type": "snaker:task", "text": {"value": "Apply"},
+            "properties": {"assignee": "applicant"}},
+           {"id": "t1", "type": "snaker:task", "text": {"value": "T1"},
+            "properties": {"assignee": "user1"}},
+           {"id": "end", "type": "snaker:end", "text": {"value": "End"}}
+         ],
+         "edges": [
+           {"id": "e1", "sourceNodeId": "start", "targetNodeId": "apply"},
+           {"id": "e2", "sourceNodeId": "apply", "targetNodeId": "t1"},
+           {"id": "e3", "sourceNodeId": "t1", "targetNodeId": "end"}
+         ]}
+        """;
+
+    /// <summary>档 1（① 的现行方向；内置 boot2 版是「全流程优先」，规范明令不得反向迁就）：
+    /// 同授权人并存「全流程」＋「精确」且都窗内 ⇒ 精确接管，即便全流程那条 id 更大。
+    /// 另一腿（精确判否 ⇒ 仍兜底全流程）已由
+    /// <see cref="S116_29_ExactScopeInvalidStillFallsBackToGlobal_MemoryRepo"/> 钉住，不重复造。</summary>
+    [Fact]
+    public async Task S152_01_ExactScopeBeatsGlobalScopeWhenBothInWindow()
+    {
+        var h = NewHarness();
+        // id 刻意让全流程那条更大：若实现按"跨作用域取最新一条"（＝内置版方向），就会接管成 deputyGlobal
+        await LedgerAsync(h, "leader", "deputyGlobal", processName: "",
+            start: Now.AddDays(-1), end: Now.AddDays(1), id: 1000);
+        await LedgerAsync(h, "leader", "deputyExact", processName: "simple",
+            start: Now.AddDays(-1), end: Now.AddDays(1), id: 900);
+
+        var hit = await h.Ext!.GetSurrogateAsync("leader", "simple", Now);
+        Assert.Equal("deputyExact", hit?.Surrogate);
+        var (_, taskId) = await StartToLeaderTaskAsync(h);
+        var actors = await PersistedActorsAsync(h, taskId);
+        Assert.Equal(new List<string> { "leader", "deputyExact" }, actors);
+        Assert.DoesNotContain("deputyGlobal", actors);   // 全流程盖住精确＝内置版语义，引擎不得复活
+    }
+
+    /// <summary>档 4（③ 那一族；本栈的病是「含键即覆写」把空白档原样落进 operator）：
+    /// 门面 save 的 operator 三档（缺键／空串／全空白）一律走 §2.5 归一，**不得落空串**——
+    /// 空串行是「死行」：<c>WHERE operator = ?</c> 永不命中，台账看得见、待办永远不并人。
+    /// 正面判据：以归一后的授权人（user1）建单，代理人真并进 wf_process_task_actor。</summary>
+    [Fact]
+    public async Task S152_04_SaveOperatorThreeTiersNormalizeAndStillApply()
+    {
+        foreach (var (label, given) in new (string, object?)[]
+                 { ("缺键", null), ("空串", ""), ("全空白", "   ") })
+        {
+            var h = NewHarness();
+            var facade = new JeeflowFacade(h.Ctx);
+            var args = new FlowData
+            {
+                ["processName"] = "i152-user1", ["surrogate"] = "dep152",
+                ["startTime"] = "2000-01-01 00:00:00", ["endTime"] = "2999-12-31 23:59:59",
+            };
+            if (given != null) args["operator"] = given;
+            var save = await facade.FlowAsync("processSurrogate/save", args);
+            Assert.Equal(0, save["code"]);
+            var id = ((Dictionary<string, object?>)save["data"]!)["id"];
+            var detail = (Dictionary<string, object?>)(
+                await facade.FlowAsync("processSurrogate/detail", new FlowData { ["id"] = id }))["data"]!;
+            Assert.True((string?)detail["operator"] == "user1",
+                $"{label}档必须落 §2.5 归一缺省 user1，实得 [{detail["operator"]}]（空串＝死行）");
+
+            // 正面判据：这一行必须能被该缺省用户的后续待办命中（代理人真进参与者表）
+            var defineId = await TestInfra.SaveFlowDefineAsync(h.Repo, "i152-user1", UserOneFlow);
+            var (_, taskId) = await AdvancePastApplyAsync(h, defineId);
+            var actors = await PersistedActorsAsync(h, taskId);
+            Assert.True(actors.Contains("dep152"),
+                $"{label}档的行要能被 user1 的待办命中，实得 [{string.Join(",", actors)}]");
+        }
+    }
+
+    /// <summary>档 4 的 update 腿（B）：operator 缺键／空串／全空白一律<b>保留原授权人</b>，
+    /// 只有显式非空值才覆盖（java <c>applySurrogateFields</c> 同形）。</summary>
+    [Fact]
+    public async Task S152_04_UpdateOperatorTiersKeepOriginalUnlessExplicit()
+    {
+        foreach (var (label, given, want) in new (string, object?, string)[]
+                 { ("缺键", null, "op152"), ("空串", "", "op152"), ("全空白", "  ", "op152"),
+                   ("显式非空", "someoneelse", "someoneelse") })
+        {
+            var h = NewHarness();
+            var id = await LedgerAsync(h, "op152", "dep152");
+            var facade = new JeeflowFacade(h.Ctx);
+            var args = new FlowData { ["id"] = id, ["surrogate"] = "dep152b" };
+            if (given != null) args["operator"] = given;
+            var resp = await facade.FlowAsync("processSurrogate/update", args);
+            Assert.Equal(0, resp["code"]);
+            var detail = (Dictionary<string, object?>)(
+                await facade.FlowAsync("processSurrogate/detail", new FlowData { ["id"] = id }))["data"]!;
+            Assert.True((string?)detail["operator"] == want,
+                $"{label}档 update 后授权人应为 {want}，实得 [{detail["operator"]}]");
+            Assert.Equal("dep152b", detail["surrogate"]);   // 回归：其余字段照常更新
+        }
+    }
+
+    /// <summary>档 5（② 门面层）：processSurrogate/page 归属——带 operator 只见自己；
+    /// 不带／空串／全空白 ⇒ 只出归一缺省 user1 的行，**绝不允许退化成全库台账**。
+    /// 反向哨兵＝zhangsan 那行必须出现在"别人"档而不出现在缺省档，否则"只出 user1"是空表自等。</summary>
+    [Fact]
+    public async Task S152_05_PageOwnershipOnlyOwnRowsThroughFacade()
+    {
+        var h = NewHarness();
+        await LedgerAsync(h, "user1", "depMine");
+        await LedgerAsync(h, "zhangsan", "depOther");
+        var facade = new JeeflowFacade(h.Ctx);
+
+        Assert.Equal(new[] { "zhangsan" }, await PageOperatorsAsync(facade, "zhangsan"));
+        Assert.Equal(new[] { "user1" }, await PageOperatorsAsync(facade, "user1"));   // 正向对照：两档各有行
+        foreach (var label in new[] { "缺 operator", "空串", "全空白" })
+        {
+            var rows = await PageOperatorsAsync(facade, label == "缺 operator" ? null
+                : label == "空串" ? "" : "   ");
+            Assert.True(rows.SequenceEqual(new[] { "user1" }),
+                $"{label}档应归一到 user1 只出他的行，实得 [{string.Join(",", rows)}]（全库＝归属不变式没立住）");
+        }
+        Assert.Empty(await PageOperatorsAsync(facade, "nobody152"));   // 不存在的人 ⇒ 0 行
+    }
+
+    /// <summary>档 5（② 仓储层第二道）：绕过门面直调内存仓，归属条件整条没给或给的是空值 ⇒ 空页。
+    /// 判据与 <c>MySqlRepository.BuildWhere</c> 的 <c>AND 1=0</c> 同一枚
+    /// （<see cref="PageQuery.HasEffectiveCondition"/>），同栈两仓同答案＝spec 06 §4.5 条款 6。
+    /// SQL 文本层读数见 <c>EmptyOperator129Tests.S152_*</c>。</summary>
+    [Fact]
+    public async Task S152_05_PageSurrogatesBlankOwnershipReturnsEmptyPage_MemoryRepo()
+    {
+        var h = NewHarness();
+        await LedgerAsync(h, "op152", "dep152");
+        await LedgerAsync(h, "op152b", "dep152b");
+
+        // 正向对照：真实归属列必须出行（否则下面的 0 是"查询恒空"假绿）
+        Assert.Equal(1, (await h.Ext!.PageSurrogatesAsync(
+            new PageQuery(1, 50).Add("t.operator", "EQ", "op152"))).RecordCount);
+        foreach (var blank in new object?[] { "", "   ", "\t", null })
+        {
+            var n = (await h.Ext.PageSurrogatesAsync(
+                new PageQuery(1, 50).Add("t.operator", "EQ", blank))).RecordCount;
+            Assert.True(n == 0, $"归属列空值 [{Show(blank)}] 不得退化成全库，实得 {n} 行");
+        }
+        Assert.Equal(0, (await h.Ext.PageSurrogatesAsync(new PageQuery(1, 50))).RecordCount);   // 整条没给
+    }
+
+    private static async Task<List<string>> PageOperatorsAsync(JeeflowFacade facade, string? operatorValue)
+    {
+        var args = new FlowData { ["pageSize"] = 50 };
+        if (operatorValue != null) args["operator"] = operatorValue;
+        var resp = await facade.FlowAsync("processSurrogate/page", args);
+        Assert.Equal(0, resp["code"]);
+        var rows = (List<object?>)((Dictionary<string, object?>)resp["data"]!)["rows"]!;
+        return rows.Select(r => (string?)((Dictionary<string, object?>)r!)["operator"] ?? "<null>")
+                   .OrderBy(x => x, StringComparer.Ordinal).ToList();
     }
 
     // ── 辅助 ──

@@ -288,7 +288,10 @@ public class MySqlExtRepository : IProcessExtRepository
         "t.create_time", "t.update_time", "t.is_deployed",
     };
 
-    private static readonly HashSet<string> SurrogateWhitelist = new()
+    /// <summary>委托分页的条件白名单（issues/152 ②：门面注入的归属列 <c>t.operator</c> 必须在列内，
+    /// 否则注入会被 BuildWhere 第一句"不在白名单，丢弃"吃掉——测试工程直取本字段核对这一点，
+    /// 故由 private 改 internal，与 Facade.csproj 的 InternalsVisibleTo 同一姿势）。</summary>
+    internal static readonly HashSet<string> SurrogateWhitelist = new()
     {
         "t.id", "t.process_name", "t.operator", "t.surrogate", "t.start_time", "t.end_time",
         "t.enabled", "t.create_time", "t.update_time",

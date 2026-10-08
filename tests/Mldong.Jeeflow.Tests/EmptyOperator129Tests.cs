@@ -171,6 +171,39 @@ public class EmptyOperator129Tests
         Assert.Equal("", probe.Build(new PageQuery(1, 50).Add("t.operator", "LIKE", ""), wl).Sql);
     }
 
+    // ═══ 第二层 B′（issues/152 ②）：委托分页那一腿的 SQL 文本层判据 ═══
+
+    /// <summary>
+    /// issues/152 ②：内存仓与 SQL 仓必须同答案（spec 06 §4.5 条款 6）——委托分页走的是同一支
+    /// <see cref="MySqlRepository.BuildWhere"/>，但白名单是 <c>MySqlExtRepository</c> 自己那份：
+    /// 归属列 <c>t.operator</c> 要是不在白名单里，门面注入的条件会被第一句"不在白名单，丢弃"吃掉，
+    /// 光看门面那半永远照不出来。T0 不连库，判据打在拼串层（真库同形用例归 T1）。
+    /// </summary>
+    [Fact]
+    public void S152_MySqlSurrogatePageBlankOwnershipAppendsFalsePredicate()
+    {
+        Assert.Contains("t.operator", MySqlExtRepository.SurrogateWhitelist);
+
+        var probe = new WhereProbe();
+        foreach (var blank in new object?[] { "", "   ", null })
+        {
+            var (sql, bind) = probe.Build(
+                new PageQuery(1, 50).Add("t.operator", "EQ", blank), MySqlExtRepository.SurrogateWhitelist);
+            Assert.Equal(" AND 1=0", sql);
+            Assert.Empty(bind);
+        }
+
+        // 正向对照：真实归属值照常下推（证明上面那串 1=0 不是恒真）
+        var (hitSql, hitBind) = probe.Build(
+            new PageQuery(1, 50).Add("t.operator", "EQ", "op152"), MySqlExtRepository.SurrogateWhitelist);
+        Assert.Equal(" AND t.operator = ?", hitSql);
+        Assert.Equal(new object?[] { "op152" }, hitBind);
+
+        // 改动面哨兵：委托表上的可选过滤（非归属列）空值仍走"当作没填"，不得被一起改成空页
+        Assert.Equal("", probe.Build(new PageQuery(1, 50).Add("t.process_name", "LIKE", ""),
+            MySqlExtRepository.SurrogateWhitelist).Sql);
+    }
+
     /// <summary>只为把 protected 的 BuildWhere 暴露出来——不建连接、不发 SQL。</summary>
     private sealed class WhereProbe : MySqlRepository
     {

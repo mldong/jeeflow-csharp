@@ -9,6 +9,11 @@
     <PackageReference Include="MySqlConnector" />
   </ItemGroup>
   <ItemGroup>
+    <!-- issues/152 ②：T0 不连库，SQL 文本层判据（归属列空值 ⇒ AND 1=0）与委托分页白名单
+         都要能被测试工程直取——与 Core/Facade 两个 csproj 同一姿势，公开 API 面不扩成员 -->
+    <InternalsVisibleTo Include="Mldong.Jeeflow.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <None Include="Schema\schema-mysql.sql" Pack="true" PackagePath="schema" />
   </ItemGroup>
 </Project>

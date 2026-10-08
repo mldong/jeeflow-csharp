@@ -327,6 +327,9 @@ public partial class JeeflowFacade
     private async Task<Dictionary<string, object?>> SurrogatePageAsync(FlowData args)
     {
         var query = new JeeflowQueryParser().Parse(args);
+        // issues/152 ②：t.operator 是归属列，与 InstancePageAsync 逐字同形注入（spec 06 §2.5 表 + §4.5 归属不变式）。
+        // 修前这里是契约空白——「我的委托只看自己授出的行」全靠集成壳注入 operator，换宿主／直调 SPI 就退化成全库台账。
+        query.Add("t.operator", "EQ", OperatorArg(args));
         var page = await Ext().PageSurrogatesAsync(query);
         return PageResultOut(page);
     }
@@ -386,11 +389,20 @@ public partial class JeeflowFacade
         return Ok(SurrogateRowToMap(surrogate));
     }
 
-    /// <summary>委托写入公共字段。授权人仅在显式传入时覆盖（避免 update 清空原授权人）。</summary>
+    /// <summary>委托写入公共字段。授权人仅在显式传入<b>非空</b>值时覆盖（避免 update 清空原授权人）。</summary>
     private static void ApplySurrogateFields(ProcessSurrogate s, FlowData args, string op)
     {
         s.ProcessName = ToStr(args.GetObj("processName"));
-        if (args.ContainsKey("operator")) s.Operator = ToStr(args.GetObj("operator"));
+        // issues/152 ③（本栈形状是「含键即覆写」，空串/全空白同样落进 operator）：只认非空的显式值。
+        // 空白档落进 operator 就是「死行」——getSurrogate 的 WHERE operator = ? 永不命中，
+        // 台账看得见、待办永远不并人（spec 06 §2.5 空串＝缺键同档）。
+        // save 路径的 op 形参已是归一值（缺省 user1，见 SurrogateSaveAsync），空白档保留它即可；
+        // update 路径的 op 同样是归一值，但原授权人不能被空白值抹掉 ⇒ 空白档保留 s.Operator。
+        if (args.ContainsKey("operator"))
+        {
+            var explicitOperator = PageQuery.NormalizeActorValue(args.GetObj("operator"));
+            if (explicitOperator != null) s.Operator = explicitOperator;
+        }
         s.Surrogate = ToStr(args.GetObj("surrogate"));
         s.StartTime = ParseTime(args.GetObj("startTime"));
         s.EndTime = ParseTime(args.GetObj("endTime"));

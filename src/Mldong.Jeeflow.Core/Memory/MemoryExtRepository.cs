@@ -147,7 +147,24 @@ public class MemoryExtRepository : IProcessExtRepository
 
     public virtual Task<PageResult<ProcessSurrogate>> PageSurrogatesAsync(PageQuery query)
     {
+        // issues/152 ②：归属不变式的第二层（内存仓储）。t.operator 是归属列，条件整条没给或给的是空值
+        // ⇒ 空页，判据与 MySqlRepository.BuildWhere 的 `AND 1=0` 共用同一枚
+        // （PageQuery.HasEffectiveCondition），同栈两仓必须同答案（spec 06 §4.5 条款 6）。
+        // 修前本方法整个忽略 query.Conditions ⇒ 门面注入的归属条件在这条路上等于没注入。
+        if (!PageQuery.HasEffectiveCondition(query, "t.operator"))
+        {
+            return Task.FromResult(PageResult<ProcessSurrogate>.Of(
+                Math.Max(query.PageNum, 1), Math.Max(query.PageSize, 1), 0, new List<ProcessSurrogate>()));
+        }
+        // 归属条件的值用于等值过滤（门面注入的就是 EQ 这一档）。其余 m_ 条件本仓现状仍整体忽略，
+        // 那是 issues/152 §6 记档在案的同栈双仓分叉，不在本案（②③）范围。
+        var owner = query.Conditions
+            .Where(c => string.Equals(c.Column, "t.operator", StringComparison.Ordinal)
+                        && PageQuery.HasEffectiveCondition(query, c.Column))
+            .Select(c => c.Value?.ToString()?.Trim())
+            .FirstOrDefault(v => !string.IsNullOrEmpty(v));
         var rows = Surrogates.Values
+            .Where(s => owner == null || string.Equals(s.Operator, owner, StringComparison.Ordinal))
             .OrderByDescending(s => s.Id)
             .Select(CloneSurrogate)
             .ToList();
