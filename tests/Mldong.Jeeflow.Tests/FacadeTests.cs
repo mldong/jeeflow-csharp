@@ -293,6 +293,24 @@ public class FacadeTests : IDisposable
         var csRow = rows.Select(r => (Dictionary<string, object?>)r!)
             .First(r => "task1".Equals(r["taskName"]?.ToString()));
         Assert.Equal(1, Convert.ToInt32(csRow["performType"])); // 数字非 "Countersign"
+
+        // ── issues/154④：审批记录九键之首＝ id（任务行主键），且必须是**字符串** ──
+        // 19 位雪花 id 出 number 会被 JS 截精度（issues/75/92 那族坑）；本栈出口无 id 兜底
+        // pass，宿主序列化不算引擎契约，故键值本身就得是 string。
+        foreach (var row in rows.Select(r => (Dictionary<string, object?>)r!))
+        {
+            Assert.True(row.ContainsKey("id"), $"approvalRecord 行缺 id 键: {row["taskName"]}");
+            Assert.IsType<string>(row["id"]);
+            Assert.NotEmpty((string?)row["id"]);
+        }
+        var recIds = rows.Select(r => ((Dictionary<string, object?>)r!)["id"]!.ToString()!).ToList();
+        Assert.Equal(recIds.Count, recIds.Distinct().Count()); // 行主键互不相同
+        // ── issues/154①：出口行序按 id 单调升（ORDER BY id ASC 的出口形状）──
+        var recNums = recIds.Select(s => long.Parse(s)).ToList();
+        Assert.Equal(recNums.OrderBy(x => x).ToList(), recNums);
+        // id 与持久任务行逐一对号（同一条读路 FindHistoryTasksAsync）
+        var persisted = await _repo.FindHistoryTasksAsync(inst.InstanceId!.Value);
+        Assert.Equal(persisted.Select(t => t.TaskId!.Value).OrderBy(x => x).ToList(), recNums);
     }
 
     [Fact]

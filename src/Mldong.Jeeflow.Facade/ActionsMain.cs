@@ -1,4 +1,5 @@
 using Mldong.Jeeflow.Core;
+using System.Linq;
 
 namespace Mldong.Jeeflow.Facade;
 
@@ -514,12 +515,23 @@ public partial class JeeflowFacade
     private async Task<Dictionary<string, object?>> ApprovalRecordAsync(FlowData args)
     {
         var instanceId = ToLong(args.GetObj("id"));
-        var history = await _repository.FindHistoryTasksAsync(instanceId!.Value);
+        // issues/154①：approvalRecord 出口按 id ASC。这一栈**不改仓储腿**——
+        // MySqlRepository.FindTasksInternalAsync 同时服务 doing/done 两条列表（todoList/doneList
+        // 的序另有口径），改它会把两格的顺序一起带跑；而 java 那条 findHistoryTasks 只被
+        // highLight＋approvalRecord 两个视图端点消费（highLight 对序不敏感），处境不同。
+        // 故在本条取数路径就地排序（php 的处置同款），两条共享读腿（MySQL/内存）逐字不动。
+        var history = (await _repository.FindHistoryTasksAsync(instanceId!.Value))
+            .OrderBy(t => t.TaskId ?? 0L).ToList();
         var rows = new List<object?>();
         foreach (var t in history)
         {
             var vo = new Dictionary<string, object?>
             {
+                // issues/154④：审批记录九键之首＝任务行主键，且**显式**字符串化——本栈出口
+                // 没有 id 兜底 pass（DefaultJsonProvider/Outbound 都不做 long→string），
+                // 宿主集成层才有的那层序列化通道引擎不得依赖：19 位雪花 id 出 number 会被
+                // JS 截精度（同 issues/75/92 那族坑）。对齐 java String.valueOf(t.getTaskId())。
+                ["id"] = t.TaskId?.ToString() ?? "",
                 ["taskName"] = t.TaskName,
                 ["displayName"] = t.DisplayName,
                 ["taskType"] = t.TaskType == null ? null : (int)t.TaskType, // C5 数字 code
