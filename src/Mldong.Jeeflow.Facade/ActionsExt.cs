@@ -214,6 +214,8 @@ public partial class JeeflowFacade
                 Content = bytes,
                 // issues/59：保留原 version（替换语义，不递增）；缺失时兜底会误写 1
                 Version = last.Version,
+                // audit8 R5/spec 06：替换语义同保 state，不得被 SQL 腿兜底复活（停用定义 redeploy 后仍停用）
+                State = last.State,
                 UpdateUser = ToStr(args.GetObj("operator"), "system"),
             };
             await _repository.UpdateDefineAsync(def);

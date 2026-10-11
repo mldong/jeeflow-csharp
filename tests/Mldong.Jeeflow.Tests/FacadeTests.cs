@@ -156,6 +156,13 @@ public class FacadeTests : IDisposable
         var after = await _repo.FindDefineByIdAsync(id1);
         Assert.Equal(0, after!.Version); // 替换语义 version 不变（issues/59）
         Assert.Contains("v2", System.Text.Encoding.UTF8.GetString(after.Content!));
+
+        // audit8 R5：同替换语义，state 也必须保持——停用后再 redeploy 不得被复活
+        await _facade.FlowAsync("processDefine/upAndDown", new FlowData { ["id"] = id1, ["state"] = 0 });
+        Assert.Equal(0, (await _repo.FindDefineByIdAsync(id1))!.State);
+        await _facade.FlowAsync("processDefine/redeploy",
+            new FlowData { [FlowConst.ProcessDefineIdKey] = id1, ["content"] = modified });
+        Assert.Equal(0, (await _repo.FindDefineByIdAsync(id1))!.State);
     }
 
     [Fact]

@@ -48,6 +48,61 @@ public class MySqlBehaviorSuite : RepositoryBehaviorSuite
     public override async Task Behavior_DefineWriteOps() { if (Skip) return; await base.Behavior_DefineWriteOps(); }
     public override async Task Behavior_NonActorExecuteFails() { if (Skip) return; await base.Behavior_NonActorExecuteFails(); }
 
+    /// <summary>audit8 R5：redeploy 原地替换保留 version/state——SQL 腿是修复本位
+    /// （memory 腿经 null-保留天然通过、抓不出本 bug，故 teeth 放 T1 这组）；形态照
+    /// FacadeTests.Deploy_VersionIncrements_RedeployKeeps 放大：state=0 与 version=5 两处
+    /// 兜底误写点各配一枚牙。</summary>
+    [Fact]
+    public async Task R5_RedeployPreservesVersionState_MySql()
+    {
+        if (Skip) return;
+        var facade = new JeeflowFacade(_fx.Ctx);
+        var did = await _fx.SaveT1DefineAsync("r5-redeploy");
+        // 造非默认形状：停用（state=0）+ 版本 5
+        await _fx.Repo.UpdateDefineStateAsync(did, 0);
+        var seeded = await _fx.Repo.FindDefineByIdAsync(did);
+        seeded!.Version = 5;
+        await _fx.Repo.UpdateDefineAsync(seeded);
+
+        var r = await facade.FlowAsync("processDefine/redeploy",
+            new FlowData { [FlowConst.ProcessDefineIdKey] = did,
+                           ["content"] = TestInfra.LoadFlow("01-simple"), ["operator"] = "lisi" });
+        Assert.Equal(0, r["code"]);
+        var after = await _fx.Repo.FindDefineByIdAsync(did);
+        Assert.Equal(0, after!.State);   // 修复前：State=null → SQL 腿 `?? 1` 复活成 1
+        Assert.Equal(5, after.Version);  // 修复前：Version=null → SQL 腿 `?? 1` 打回 1
+    }
+
+    /// <summary>audit8 R5：processDesign/redeploy 同保 state——保存快照直接 redeploy
+    /// （define 由 name 命中 T1 种子，不走新建、免生低段 id）。</summary>
+    [Fact]
+    public async Task R5_DesignRedeployPreservesState_MySql()
+    {
+        if (Skip) return;
+        var facade = new JeeflowFacade(_fx.Ctx);
+        var content = TestInfra.LoadFlow("01-simple")
+            .Replace("\"name\": \"simple\"", "\"name\": \"T1CS-r5-design\"");
+        var did = await _fx.SaveT1DefineAsync("r5-design"); // define name = T1CS-r5-design
+        await _fx.Repo.UpdateDefineStateAsync(did, 0);
+        long? designId = null;
+        try
+        {
+            var save = await facade.FlowAsync("processDesign/save",
+                new FlowData { ["name"] = "r5-design", ["displayName"] = "R5设计", ["content"] = content });
+            Assert.Equal(0, save["code"]);
+            designId = Convert.ToInt64(((Dictionary<string, object?>)save["data"]!)["id"]);
+
+            var rd = await facade.FlowAsync("processDesign/redeploy", new FlowData { ["id"] = designId });
+            Assert.Equal(0, rd["code"]);
+            Assert.Equal(did, Convert.ToInt64(((Dictionary<string, object?>)rd["data"]!)["processDefineId"]));
+            Assert.Equal(0, (await _fx.Repo.FindDefineByIdAsync(did))!.State); // 修复前：SQL 腿 `?? 1` 复活
+        }
+        finally
+        {
+            if (designId != null) await _fx.ExtRepo.RemoveDesignAsync(designId.Value);
+        }
+    }
+
     protected override async Task<(long DefineId, long InstanceId)> SeedSimpleFlowAsync(
         JeeflowEngine engine, IProcessRepository repo, string businessNo, FlowData? args = null)
     {

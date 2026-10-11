@@ -90,6 +90,14 @@ public partial class JeeflowFacade
             Content = bytes,
             UpdateUser = ToStr(args.GetObj("operator"), "system"),
         };
+        // audit8 R5/spec 06：redeploy 是原地替换内容——先读再写保留原 state/version
+        // （修复前 SQL 腿 `?? 1` 把停用定义复活、把原版本号打回 1）
+        var old = await _repository.FindDefineByIdAsync(defineId);
+        if (old != null)
+        {
+            def.State = old.State;
+            def.Version = old.Version;
+        }
         await _repository.UpdateDefineAsync(def);
         return Ok();
     }
