@@ -345,9 +345,12 @@ public partial class JeeflowFacade
                 CollectPath(model.GetStart(), activeNodeNames, historyNodeNames, historyEdgeNames,
                     new HashSet<string>(), inst.Variables, history);
             }
-            catch
+            catch (Exception e)
             {
-                // 高亮容错（对齐 Java 吞异常）
+                // 高亮容错：降级出口不变（code=0、空补全腿），但不再静默——
+                // 三件（instanceId/defineId/err）进 stderr（issues/162 R7，对齐 Java WARN 同形）。
+                Console.Error.WriteLine("[jeeflow] WARN highLight 模型补全腿解码失败: instanceId=" + instanceId
+                    + ", defineId=" + inst.DefineId + ", err=" + e);
             }
         }
         return Ok(new Dictionary<string, object?>
