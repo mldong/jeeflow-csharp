@@ -33,18 +33,22 @@ public static class BusinessSeed
         new(8, "user1", null, null),
     };
 
-    /// <summary>已完成 9 条：advance 推到 state=20（分支无关）</summary>
+    /// <summary>已完成 9 条：advance 推到 state=20（分支无关）。
+    /// issues/166 A（2026-10-11）：F5/F8/F9 补 finalAmount=8000——三行的 deptLeader 本是
+    /// 15 文件编号时代 11-assignee-vars 的判定变量，flows 目录插入 06-…-expire.json 后
+    /// define=12 已是 10-mixed-mode（八仓同序），决策边 finalAmount&gt;5000/&lt;=5000 没这把键
+    /// 无路可走；补键走 e8→boss→end（与旧蒙臂 edges[0] 同形），矩阵"9 行已完成"原意复原。</summary>
     private static readonly Row[] Finished =
     {
         new(1, "userA", null, new[] { "user1", "director" }),
         new(8, "userB", null, new[] { "boss", "manager" }),
         new(2, "manager", null, new[] { "boss" }),
         new(10, "director", null, null),
-        new(12, "userC", new Dictionary<string, object?> { ["deptLeader"] = "leader" }, null),
+        new(12, "userC", new Dictionary<string, object?> { ["deptLeader"] = "leader", ["finalAmount"] = 8000L }, null),
         new(1, "director", null, null),
         new(5, "manager", null, null),
-        new(12, "userA", new Dictionary<string, object?> { ["deptLeader"] = "director" }, null),
-        new(12, "userB", new Dictionary<string, object?> { ["deptLeader"] = "user1" }, null),
+        new(12, "userA", new Dictionary<string, object?> { ["deptLeader"] = "director", ["finalAmount"] = 8000L }, null),
+        new(12, "userB", new Dictionary<string, object?> { ["deptLeader"] = "user1", ["finalAmount"] = 8000L }, null),
     };
 
     /// <summary>委托 8 条：processSurrogate/page 无 operator 过滤 → 8 用户委托菜单全非空</summary>
