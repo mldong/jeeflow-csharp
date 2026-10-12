@@ -100,13 +100,17 @@ public class MySqlExtRepository : IProcessExtRepository
     public virtual async Task RemoveDesignAsync(long designId)
     {
         await using var lease = await RentAsync();
-        await using (var cmd = new MySqlCommand("DELETE FROM wf_process_design WHERE id=?", lease.Conn))
+        // ⚠️ 命令一律经 NewCmd 建（它绑定 AmbientTx）：环境事务接通后连接带活动事务，
+        // 直接 `new MySqlCommand` 会撞 MySqlConnector「The transaction associated with this
+        // command is not the connection's active transaction」（issues/145 10-12 csharp 段
+        // 的 processDesign/remove 三红；无事务形态下 cmd.Transaction=null 合法，故修前潜伏）。
+        await using (var cmd = NewCmd("DELETE FROM wf_process_design WHERE id=?", lease.Conn))
         {
             cmd.Parameters.Add(new MySqlParameter { Value = designId });
             await cmd.ExecuteNonQueryAsync();
         }
         // 级联删历史（同连接，对齐 JDBC）
-        await using (var cmd = new MySqlCommand("DELETE FROM wf_process_design_his WHERE process_design_id=?", lease.Conn))
+        await using (var cmd = NewCmd("DELETE FROM wf_process_design_his WHERE process_design_id=?", lease.Conn))
         {
             cmd.Parameters.Add(new MySqlParameter { Value = designId });
             await cmd.ExecuteNonQueryAsync();

@@ -323,6 +323,55 @@ public class MySqlTxTier145Tests
         }
     }
 
+    // ═══ ② 归属档补充：环境事务下 ext 仓储命令必须绑定事务（R9-csharp 二轮根因 ①）═══
+
+    [Fact]
+    public async Task T145_8_ExtRepoCommandsBindAmbientTx_DesignRemove()
+    {
+        var stack = NewStack(new MySqlRepository(_fx.Factory), wired: true);
+        long d1 = -1, d2 = -1;
+        try
+        {
+            d1 = await SaveDesignAsync(stack.Facade, "T1CS-tx145-rm-1");
+            d2 = await SaveDesignAsync(stack.Facade, "T1CS-tx145-rm-2");
+            // 修前形状：RemoveDesignAsync 直接 `new MySqlCommand`（不绑 AmbientTx）⇒ 环境事务下
+            // MySqlConnector 抛「The transaction associated with this command is not the
+            // connection's active transaction」⇒ 门面转 99999999 失败信封（本用例红）。
+            var rm = await stack.Facade.FlowAsync("processDesign/remove",
+                new FlowData { ["ids"] = new List<object?> { d1 }, ["id"] = d2 });
+            Assert.Equal(0, rm["code"]);
+            Assert.Equal(0L, await CountDesignAsync(d1)); // ids 优先：点名那条真删掉
+            Assert.Equal(1L, await CountDesignAsync(d2)); // id 那条不受牵连（ids 优先语义顺带守卫）
+        }
+        finally
+        {
+            if (d1 > 0) await _fx.ExtRepo.RemoveDesignAsync(d1);
+            if (d2 > 0) await _fx.ExtRepo.RemoveDesignAsync(d2);
+        }
+    }
+
+    private static async Task<long> SaveDesignAsync(JeeflowFacade facade, string name)
+    {
+        var save = await facade.FlowAsync("processDesign/save", new FlowData
+        {
+            ["name"] = name,
+            ["displayName"] = name,
+            ["type"] = "6",
+            ["icon"] = "",
+            ["remark"] = "r9-csharp tier",
+        });
+        Assert.Equal(0, save["code"]);
+        return Convert.ToInt64(((Dictionary<string, object?>)save["data"]!)["id"]);
+    }
+
+    private async Task<long> CountDesignAsync(long id)
+    {
+        await using var conn = await _fx.Factory.OpenAsync();
+        await using var cmd = new MySqlCommand("SELECT COUNT(*) FROM wf_process_design WHERE id=?", conn);
+        cmd.Parameters.Add(new MySqlParameter { Value = id });
+        return Convert.ToInt64(await cmd.ExecuteScalarAsync());
+    }
+
     // ═══ 测试装置 ═══
 
     private static async Task<bool> ProbeAsync(JeeflowEngine engine, long taskId)

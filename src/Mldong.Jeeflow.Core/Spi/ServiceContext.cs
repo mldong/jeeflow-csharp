@@ -90,7 +90,12 @@ public sealed class ServiceContext
 
     public IClock ClockOrDefault => Clock ?? SystemClock.Instance;
 
-    public IIdGenerator IdGeneratorOrDefault => IdGenerator ?? new AtomicIdGenerator(0L, Clock);
+    // ⚠️ 必须是**懒建即缓存**（`??=`），不能写成 `?? new …`：后者每次访问都新建一枚生成器，
+    // 每枚首个 NextId() 都是 (ts<<22)|(workerId 0<<12)|sequence 0 —— 同一毫秒内两次访问就吐
+    // 同一个 id（集成壳不设 ctx.IdGenerator 时命中：事务接通后同连接逐句往返降到亚毫秒级，
+    // 参与者行连续 INSERT 撞同毫秒 ⇒ `Duplicate entry … wf_process_task_actor.PRIMARY`，
+    // 见 issues/145 10-12 csharp 段）。缓存后序列在锁内自增，同毫秒内 id 逐枚互异。
+    public IIdGenerator IdGeneratorOrDefault => IdGenerator ??= new AtomicIdGenerator(0L, Clock);
 
     public IActionPermissionProvider ActionPermissionProviderOrDefault =>
         ActionPermissionProvider ?? DefaultActionPermissionProvider.Instance;

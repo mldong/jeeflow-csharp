@@ -541,3 +541,37 @@ public class MetadataPermissionTests
         Assert.Equal("已拒绝", instance[4].Label);
     }
 }
+
+/// <summary>
+/// audit8 R9-csharp 二轮守卫（issues/145 10-12）：<c>ServiceContext.IdGeneratorOrDefault</c>
+/// 必须懒建即缓存。修前形状 <c>IdGenerator ?? new AtomicIdGenerator(0L, Clock)</c> 每次访问新建
+/// 一枚生成器，每枚首个 NextId() 都是 <c>(ts&lt;&lt;22)|0|0</c>——同一毫秒内两次访问吐同一个 id。
+/// 集成壳不设 ctx.IdGenerator 时命中：事务接通后参与者行连续 INSERT 降到亚毫秒级，同毫秒撞 id
+/// ⇒ <c>Duplicate entry … wf_process_task_actor.PRIMARY</c>（候选镜像门禁 20 处红）。固定钟 ⇒
+/// 修前本用例确定性红，修后共享序列自增 ⇒ 绿。
+/// </summary>
+public class ServiceContextDefaultGeneratorTests
+{
+    [Fact]
+    public void DefaultIdGenerator_IsCached_SameMsIdsDistinct()
+    {
+        var ctx = new ServiceContext(new MemoryRepository())
+        {
+            Clock = new FixedClock(new DateTime(2026, 10, 12, 9, 0, 0)),
+        };
+        var a = ctx.IdGeneratorOrDefault;
+        var b = ctx.IdGeneratorOrDefault;
+        Assert.Same(a, b);                        // 同一枚实例（缓存）
+        Assert.NotEqual(a.NextId(), b.NextId());  // 同毫秒内连续两枚 id 必须互异（序列自增）
+        Assert.Same(a, ctx.IdGeneratorOrDefault); // 再次访问仍是同一枚
+    }
+
+    [Fact]
+    public void ExplicitIdGenerator_NotOverridden()
+    {
+        var ctx = new ServiceContext(new MemoryRepository());
+        var mine = new AtomicIdGenerator(3, new FixedClock(new DateTime(2026, 10, 12, 9, 0, 0)));
+        ctx.IdGenerator = mine;
+        Assert.Same(mine, ctx.IdGeneratorOrDefault); // 显式注入优先（缓存不得覆盖注入件）
+    }
+}
