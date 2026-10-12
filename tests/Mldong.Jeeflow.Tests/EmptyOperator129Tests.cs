@@ -80,11 +80,13 @@ public class EmptyOperator129Tests
     {
         var facade = await SeedAsync();
 
-        // 正向对照：user1 档非空（否则下面的三档相等是 0==0 自等假绿）
+        // 正向对照：user1 档非空（否则下面的三档相等是 0==0 自等假绿）。
+        // R10（issues/176）：apply 行由 flow.auto 代执行（spec 04:60-62）⇒ 不进发起人已办；
+        // "数据真的在"改锚 flow.auto 档（两单两行），否则 doneList 那格 0==0 是自等假绿
         Assert.Equal(1, await RowsAsync(facade, "processInstance/page", Of("user1")));
         Assert.Equal(1, await RowsAsync(facade, "processInstance/ccList", Of("user1")));
-        Assert.True(await RowsAsync(facade, "processTask/doneList", Of("user1")) >= 1,
-            "user1 办结的 apply 应进自己已办");
+        Assert.Equal(0, await RowsAsync(facade, "processTask/doneList", Of("user1")));
+        Assert.Equal(2, await RowsAsync(facade, "processTask/doneList", Of(FlowConst.AutoId)));
         Assert.True(await RowsAsync(facade, "processTask/todoList", Of("leader")) >= 1,
             "leader 手上应有待办（对照档，也是空串档的反面参照）");
 
