@@ -64,12 +64,11 @@ public class ProcessInstance
         }
     }
 
-    /// <summary>废弃指定任务 → 流程实例也废弃。</summary>
+    /// <summary>废弃指定任务（仅任务级；不连带实例状态——spec 04 与 go/py/node 对齐，issues/180）。</summary>
     public void AbandonTask(long taskId, string? op, IClock? clock = null)
     {
         var task = FindDoingTask(taskId);
         task.Abandon(op, clock);
-        State = (int)WfInstanceState.Abandon;
         Touch(op, clock);
     }
 
