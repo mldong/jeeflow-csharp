@@ -137,6 +137,30 @@ public class BlankNameCondition179Tests
         Assert.Equal(0, (await ctx.ExtRepository!.FindDesignByIdAsync(designId))!.IsDeployed);
     }
 
+    /// <summary>R13-2（真机探针定案）：updateDefine 缺名草稿必须能入库——缺 name 直接赋值会撞
+    /// wf_process_design.name NOT NULL（MySql 腿真机 SQL 失败⇒整动作回滚、快照存不进）；
+    /// 修后：code=0、快照入库、设计行 name 保持旧值。</summary>
+    [Fact]
+    public async Task DesignUpdateDefine_MissingName_DraftStored_NamePreserved()
+    {
+        var (facade, _, ctx) = New();
+        var designId = await NewDesignAsync(facade, "draft179");
+        var keepName = (await ctx.ExtRepository!.FindDesignByIdAsync(designId))!.Name;
+
+        var upd = await facade.FlowAsync("processDesign/updateDefine", new FlowData
+        {
+            ["processDesignId"] = designId,
+            ["operator"] = "user1",
+            ["content"] = NoNameFlow,
+        });
+        Assert.Equal(0, Convert.ToInt32(upd["code"]));
+        Assert.Equal(keepName, (await ctx.ExtRepository!.FindDesignByIdAsync(designId))!.Name);
+
+        var his = await ctx.ExtRepository!.ListDesignHisAsync(designId);
+        Assert.True(his.Count >= 1, "缺名草稿快照应入库");
+        Assert.Contains("缺名流程", System.Text.Encoding.UTF8.GetString(his[0].Content!));
+    }
+
     private static async Task<long> NewDesignAsync(JeeflowFacade facade, string name)
     {
         var r = await facade.FlowAsync("processDesign/save", new FlowData

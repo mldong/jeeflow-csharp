@@ -170,9 +170,11 @@ public partial class JeeflowFacade
         try
         {
             var model = ModelParser.Parse(bytes, _context);
-            design.Name = model.Name;
-            design.DisplayName = model.DisplayName;
-            design.Type = model.Type;
+            // issues/179 R13-2：缺名快照允许入库（拒收边界在 deploy/redeploy）——逐字段判空，缺 name
+            // 直接赋值会撞 wf_process_design.name NOT NULL（与 Java 同形，真机 SQL 失败⇒动作回滚）
+            if (model.Name != null) design.Name = model.Name;
+            if (model.DisplayName != null) design.DisplayName = model.DisplayName;
+            if (model.Type != null) design.Type = model.Type;
         }
         catch
         {
