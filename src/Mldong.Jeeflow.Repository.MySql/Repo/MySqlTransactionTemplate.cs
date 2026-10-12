@@ -24,6 +24,10 @@ public sealed class MySqlTransactionTemplate : ITransactionTemplate
 
     public async Task<T> ExecuteInTxAsync<T>(Func<Task<T>> op)
     {
+        // audit8 R9（spec/12 §12.2 归属面）：嵌套必须并入最外层——已在事务作用域内（门面整次
+        // dispatch 已包一层 + 引擎入口又包一层）直接执行回调，不另开连接、不重复 BEGIN；
+        // 反向语义（required）同样成立：内层失败随外层一起回滚，而不是被"已有事务"拒绝。
+        if (_repository.AmbientConn.Value != null) return await op();
         await using var conn = await _factory.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync();
         var prev = _repository.AmbientConn.Value;

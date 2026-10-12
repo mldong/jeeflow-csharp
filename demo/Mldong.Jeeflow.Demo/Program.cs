@@ -21,6 +21,9 @@ ServiceContext BuildContext()
         var repo = new MySqlRepository(factory);
         var ext = new MySqlExtRepository(factory, repo);
         var ctx = FlowsSeed.NewDemoContext(repo, ext);
+        // audit8 R9（spec/12 §12.6 门票）：demo 注册事务模板并跑三档——未注册即裸跑是允许运行态，
+        // 但不得拿未注册态当契约读数；模板挂在 ctx 上，门面整次 dispatch 与引擎五入口都并入它。
+        ctx.TransactionTemplate = new MySqlTransactionTemplate(factory, repo, ext);
         repo.Configure(ctx);
         return ctx;
     }

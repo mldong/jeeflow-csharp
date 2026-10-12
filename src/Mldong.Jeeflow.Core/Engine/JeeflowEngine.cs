@@ -527,4 +527,12 @@ public class JeeflowEngine
         if (tx != null) return await tx.ExecuteInTxAsync(action);
         return await action();
     }
+
+    /// <summary>
+    /// 把一次完整动作并入当前事务作用域（audit8 R9，spec/12 §12.1 条 3：有则用、无则裸跑）。
+    /// 门面（<c>JeeflowFacade.FlowAsync</c>）用它对整次 dispatch 包一层——复合动作
+    /// （<c>startAndExecute</c> 三拍、<c>redeploy</c> 两拍等）此前各拍各事务、中途失败留半完成；
+    /// 嵌套进入本方法时由事务模板的 join 支并入最外层，不重复 BEGIN。
+    /// </summary>
+    public Task<T> InTxAsync<T>(Func<Task<T>> action) => RunInTxAsync(action);
 }

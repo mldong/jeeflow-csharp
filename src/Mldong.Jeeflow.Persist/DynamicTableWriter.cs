@@ -32,6 +32,10 @@ public static class TableNames
 /// <summary>列元数据。</summary>
 public sealed record ColumnMeta(string ColumnName, bool IsPrimaryKey, bool IsAutoIncrement);
 
+/// <summary>当前动作事务的连接载体（audit8 R9 C99 ⑥）：由集成侧从引擎仓储取（同 conn＋同 tx），
+/// writer 只借不释放——owner 是外层事务模板。</summary>
+public sealed record AmbientTxConnection(DbConnection Connection, DbTransaction? Transaction);
+
 /// <summary>
 /// 动态表写入器接口（issues/18）：列过滤/参数化 INSERT/幂等检查/系统字段补充——引擎无关。
 /// </summary>
@@ -81,6 +85,11 @@ public class DbDynamicTableWriter : IDynamicTableWriter
     public bool StrictColumnMatch { get; set; }
     /// <summary>主键生成器（issues/21）：非自增主键表插入时生成主键。</summary>
     public Func<string, object?>? PrimaryKeyGenerator { get; set; }
+
+    /// <summary>当前动作事务提供者（audit8 R9 C99 ⑥，与 py tx_conn_provider / node transactionAwarePool 同义）：
+    /// 返回非 null 时本 writer 的全部读写并入该事务（借连接不释放）；返回 null（含未注入）
+    /// ＝自开连接逐句自动提交——允许运行态（spec/12 §12.6）；未接线时行为与修复前逐字节一致。</summary>
+    public Func<AmbientTxConnection?>? AmbientTxProvider { get; set; }
 
     public DbDynamicTableWriter(IDbConnectionFactory factory, IClock? clock = null, IJsonProvider? json = null)
     {
@@ -148,8 +157,10 @@ public class DbDynamicTableWriter : IDynamicTableWriter
         }
         sql.Append(')');
 
-        await using var conn = await _factory.OpenAsync();
+        await using var lease = await LeaseAsync();
+        var conn = lease.Connection;
         await using var cmd = conn.CreateCommand();
+        if (lease.Transaction != null) cmd.Transaction = lease.Transaction;
         cmd.CommandText = sql.ToString();
         foreach (var v in values) Bind(cmd, ToDbValue(v));
         await cmd.ExecuteNonQueryAsync();
@@ -158,6 +169,7 @@ public class DbDynamicTableWriter : IDynamicTableWriter
         if (autoCol != null)
         {
             await using var idCmd = conn.CreateCommand();
+            if (lease.Transaction != null) idCmd.Transaction = lease.Transaction;
             idCmd.CommandText = "SELECT LAST_INSERT_ID()";
             var id = await idCmd.ExecuteScalarAsync();
             if (id != null && id != DBNull.Value) return id;
@@ -190,8 +202,9 @@ public class DbDynamicTableWriter : IDynamicTableWriter
             sql.Append(setCols[i]).Append(" = ?");
         }
         sql.Append(" WHERE ").Append(whereColumn).Append(" = ?");
-        await using var conn = await _factory.OpenAsync();
-        await using var cmd = conn.CreateCommand();
+        await using var lease = await LeaseAsync();
+        await using var cmd = lease.Connection.CreateCommand();
+        if (lease.Transaction != null) cmd.Transaction = lease.Transaction;
         cmd.CommandText = sql.ToString();
         foreach (var v in setVals) Bind(cmd, ToDbValue(v));
         Bind(cmd, ToDbValue(whereValue));
@@ -202,8 +215,9 @@ public class DbDynamicTableWriter : IDynamicTableWriter
     {
         TableNames.Validate(tableName);
         var sql = $"SELECT COUNT(1) FROM {tableName} WHERE {bizKey} = ?";
-        await using var conn = await _factory.OpenAsync();
-        await using var cmd = conn.CreateCommand();
+        await using var lease = await LeaseAsync();
+        await using var cmd = lease.Connection.CreateCommand();
+        if (lease.Transaction != null) cmd.Transaction = lease.Transaction;
         cmd.CommandText = sql;
         Bind(cmd, ToDbValue(bizKeyValue));
         var r = await cmd.ExecuteScalarAsync();
@@ -256,8 +270,9 @@ public class DbDynamicTableWriter : IDynamicTableWriter
                            "WHERE UPPER(table_name) = UPPER(?) AND table_schema = DATABASE() " +
                            "ORDER BY ordinal_position";
         var meta = new List<ColumnMeta>();
-        await using var conn = await _factory.OpenAsync();
-        await using var cmd = conn.CreateCommand();
+        await using var lease = await LeaseAsync();
+        await using var cmd = lease.Connection.CreateCommand();
+        if (lease.Transaction != null) cmd.Transaction = lease.Transaction;
         cmd.CommandText = sql;
         Bind(cmd, tableName);
         try
@@ -320,6 +335,22 @@ public class DbDynamicTableWriter : IDynamicTableWriter
     }
 
     // ── 工具 ──
+
+    /// <summary>取本次语句要用的连接：动作事务在跑就借它（连同事务绑定），否则自开一条并在用完后释放。</summary>
+    private async Task<ConnLease> LeaseAsync()
+    {
+        var ambient = AmbientTxProvider?.Invoke();
+        if (ambient != null) return new ConnLease(ambient.Connection, ambient.Transaction, owns: false);
+        var conn = await _factory.OpenAsync();
+        return new ConnLease(conn, null, owns: true);
+    }
+
+    private sealed class ConnLease(DbConnection connection, DbTransaction? transaction, bool owns) : IAsyncDisposable
+    {
+        public DbConnection Connection { get; } = connection;
+        public DbTransaction? Transaction { get; } = transaction;
+        public ValueTask DisposeAsync() => owns ? Connection.DisposeAsync() : ValueTask.CompletedTask;
+    }
 
     protected static void Bind(DbCommand cmd, object? value)
     {

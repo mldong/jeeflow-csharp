@@ -37,6 +37,18 @@ public class MySqlRepository : IProcessRepository
     /// <summary>两阶段接线：ServiceContext 构造后回填（打破 ctx↔repo 循环）。</summary>
     public void Configure(ServiceContext ctx) => _ctx = ctx;
 
+    /// <summary>当前 async 作用域的动作事务载体（audit8 R9 C99 ⑥）：集成层持久写腿接线用
+    /// （writer.AmbientTxProvider ← 本属性，借连接不释放）；无事务时 null＝写入自开连接逐句自动提交。</summary>
+    public (System.Data.Common.DbConnection Connection, System.Data.Common.DbTransaction? Transaction)? CurrentAmbientTx
+    {
+        get
+        {
+            var conn = AmbientConn.Value;
+            if (conn == null) return null;
+            return (conn, AmbientTx.Value);
+        }
+    }
+
     // ── JSON（引擎 SPI 收口；仓储侧默认内置 provider）──
     private IJsonProvider Json => _ctx?.JsonProvider ?? DefaultJsonProvider.Instance;
 

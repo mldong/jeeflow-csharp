@@ -63,7 +63,11 @@ public partial class JeeflowFacade
         if (args == null) args = new FlowData();
         try
         {
-            var data = action switch
+            // audit8 R9（spec/12 §12.1 条 3 / §12.2 原子面）：整次 dispatch 并入事务——引擎有模板
+            // 则用、无则裸跑。复合动作（startAndExecute 三拍、redeploy 两拍等）此前各拍各事务、
+            // 中途失败留半完成；现在中途失败整体回滚。信封在事务之外生成：先整体回滚，再转失败
+            // 信封（原子面硬义务 1：非成功出口必须转抛出，否则模板照常 COMMIT）。
+            var data = await _engine.InTxAsync(async () => action switch
             {
                 // ── 流程定义 ──
                 "processDefine/page" => await DefinePageAsync(args),
@@ -120,7 +124,7 @@ public partial class JeeflowFacade
                 "processInstance/stats/trend" => await StatsTrendAsync(args),
                 "processInstance/stats/group" => await StatsGroupAsync(args),
                 _ => Error($"未知 action: {action}"),
-            };
+            });
             return data;
         }
         catch (Exception e)
