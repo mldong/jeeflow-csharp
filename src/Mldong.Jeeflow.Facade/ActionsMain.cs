@@ -74,6 +74,8 @@ public partial class JeeflowFacade
     {
         var bytes = ContentBytes(args);
         var model = ModelParser.Parse(bytes, _context);
+        // issues/179 R13：缺 name 不得落「空值当没填」放行——版本号会盗到别流程头上（对齐 go/py/node）
+        if (string.IsNullOrWhiteSpace(model.Name)) return Error("流程定义缺少 name");
         var defineId = await SaveDeployedDefineAsync(model, bytes!);
         return Ok(new Dictionary<string, object?> { [FlowConst.ProcessDefineIdKey] = defineId });
     }
@@ -299,6 +301,8 @@ public partial class JeeflowFacade
     private async Task<Dictionary<string, object?>> GetLastByNameAsync(FlowData args)
     {
         var name = ToStr(args.GetObj("processDefineName"));
+        // issues/179 R13：必填缺失校验——空名落仓储「空值当没填」放行会丢 t.name 条件 ⇒ 查询退化全表、返他行
+        if (string.IsNullOrWhiteSpace(name)) return Error("缺少processDefineName参数");
         var query = new PageQuery(1, 1).Add("t.name", "EQ", name);
         query.OrderBy = "t.version desc";
         var page = await _repository.PageDefinesAsync(query);

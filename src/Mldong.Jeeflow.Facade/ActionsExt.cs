@@ -119,6 +119,8 @@ public partial class JeeflowFacade
         if (hisList.Count == 0) return Error("流程设计没有内容，无法发布");
         var bytes = hisList[0].Content;
         var model = ModelParser.Parse(bytes, _context);
+        // issues/179 R13：缺 name 不得落「空值当没填」放行（对齐 go/py/node）
+        if (string.IsNullOrWhiteSpace(model.Name)) return Error("流程定义缺少 name");
         var defineId = await SaveDeployedDefineAsync(model, bytes!);
         design.IsDeployed = 1;
         design.UpdateUser = ToStr(args.GetObj("operator"), "system");
@@ -193,6 +195,8 @@ public partial class JeeflowFacade
         if (hisList.Count == 0) return Error("流程设计没有内容，无法发布");
         var bytes = hisList[0].Content;
         var model = ModelParser.Parse(bytes, _context);
+        // issues/179 R13：缺 name 不得落「空值当没填」放行——替换分支会盗改他流程内容
+        if (string.IsNullOrWhiteSpace(model.Name)) return Error("流程定义缺少 name");
         // 按 name 取最新定义：有则替换内容（version 不变），无则新建
         var query = new PageQuery(1, 1).Add("t.name", "EQ", model.Name);
         query.OrderBy = "t.version desc";
