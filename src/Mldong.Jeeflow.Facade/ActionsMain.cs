@@ -348,13 +348,16 @@ public partial class JeeflowFacade
             {
                 var model = ModelParser.Parse(def.Content, _context);
                 nodeProgress = await BuildNodeProgressAsync(model, history);
-                CollectPath(model.GetStart(), activeNodeNames, historyNodeNames, historyEdgeNames,
+                await CollectPathAsync(model.GetStart(), activeNodeNames, historyNodeNames, historyEdgeNames,
                     new HashSet<string>(), inst.Variables, history);
             }
             catch (Exception e)
             {
                 // 高亮容错：降级出口不变（code=0、空补全腿），但不再静默——
                 // 三件（instanceId/defineId/err）进 stderr（issues/162 R7，对齐 Java WARN 同形）。
+                // ⚠ 上面两条腿都必须 await：async 方法里抛出的异常一律收进返回的 Task、不同步上抛，
+                //   不 await 就等于把这枚 catch 对那条腿永久关掉（issues/193：collectPath 腿曾因此
+                //   零日志静默中断，而 162 的判据用坏定义取证，只照到了 parse/build 半腿）。
                 Console.Error.WriteLine("[jeeflow] WARN highLight 模型补全腿解码失败: instanceId=" + instanceId
                     + ", defineId=" + inst.DefineId + ", err=" + e);
             }
@@ -523,11 +526,6 @@ public partial class JeeflowFacade
         var result = evaluator.Eval(tm.Expr!, args);
         return result is true;
     }
-
-    private Task CollectPath(
-        NodeModel? node, List<string> active, List<string> history, List<string> edges,
-        HashSet<string> visited, FlowData instanceVars, List<ProcessTask> historyTasks) =>
-        CollectPathAsync(node, active, history, edges, visited, instanceVars, historyTasks);
 
     private async Task<Dictionary<string, object?>> ApprovalRecordAsync(FlowData args)
     {

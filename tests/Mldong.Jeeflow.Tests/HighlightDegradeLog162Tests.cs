@@ -13,6 +13,9 @@ namespace Mldong.Jeeflow.Tests;
 ///    instanceId=／defineId=／err= 三件（进程内捕获 Console.Error，不接受"注释自称"）；
 /// ② 好定义 ⇒ 非空边集且**不得出现**该 WARN。
 /// </summary>
+// `Console.SetError` 是进程全局：捕获 stderr 的测试类之间必须串行，否则 A 类的写入会落进 B 类的
+// buffer（B 读到别人的 WARN、A 读到自己的零行）。issues/193 新增同型夹具后两条腿共挂 "stderr" 档。
+[Collection("stderr")]
 public class HighlightDegradeLog162Tests
 {
     private readonly MemoryRepository _repo;
