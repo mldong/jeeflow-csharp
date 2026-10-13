@@ -324,12 +324,20 @@ public class DbDynamicTableWriter : IDynamicTableWriter
     protected static string NormalizeColumn(string name) =>
         name.ToLowerInvariant().Replace("_", "");
 
-    protected static string? FindDataKey(IDictionary<string, object?> data, string col)
+    /// <summary>列匹配（issues/20）：data 键→表列的反查，与 <c>FindColumn</c> 同门控——严格档＝忽略大小写精确。</summary>
+    protected string? FindDataKey(IDictionary<string, object?> data, string col)
     {
         foreach (var k in data.Keys)
         {
             if (k == null) continue;
-            if (NormalizeColumn(col).Equals(NormalizeColumn(k), StringComparison.Ordinal)) return k;
+            if (StrictColumnMatch)
+            {
+                if (col.Equals(k, StringComparison.OrdinalIgnoreCase)) return k;
+            }
+            else if (NormalizeColumn(col).Equals(NormalizeColumn(k), StringComparison.Ordinal))
+            {
+                return k;
+            }
         }
         return null;
     }
