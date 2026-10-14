@@ -828,18 +828,24 @@ public sealed class MySqlFixture : IAsyncLifetime
     private async Task EnsureSchemaAsync()
     {
         var schemaPath = FindSchemaPath();
-        var statements = File.ReadAllText(schemaPath)
-            .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var statements = SplitSchemaStatements(File.ReadAllText(schemaPath));
         await using var conn = await Factory.OpenAsync();
         foreach (var st in statements)
         {
-            if (!st.TrimStart().StartsWith("CREATE", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!st.StartsWith("CREATE", StringComparison.OrdinalIgnoreCase)) continue;
             await using var cmd = new MySqlCommand(st, conn);
             await cmd.ExecuteNonQueryAsync();
         }
     }
 
-    private static string FindSchemaPath()
+    /// <summary>建表 SQL 分句：先剥 `--` 行首注释、再按 `;` 分句（rust `test_init_schema_statement_split` 同款口径）。
+    /// 历史坑（audit8 R47）：旧实现「按 `;` 分句后判段首 `--`」在文件头注释紧跟首句 DDL 时，会把第一句
+    /// `CREATE TABLE wf_process_define` 误吞 ⇒ 空库 T1 首错 `Table '…wf_process_define' doesn't exist`。</summary>
+    internal static string[] SplitSchemaStatements(string ddl) =>
+        string.Join('\n', ddl.Split('\n').Where(l => !l.TrimStart().StartsWith("--")))
+            .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+    internal static string FindSchemaPath()
     {
         foreach (var dir in new[] { "../../..", "../..", "..", "../../../../.." })
         {
