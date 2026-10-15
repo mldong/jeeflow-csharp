@@ -253,13 +253,13 @@ public class AggregateTests
 public class FlowUtilTests
 {
     [Fact]
-    public void AddAutoGenTitle_HoursOnly()
+    public void AddAutoGenTitle_SecondsPerSpec232()
     {
-        // C7/C25：autoGenTitle 用 HH:mm（非秒级）
+        // issues/232 R64 拍 A：autoGenTitle 钉秒 yyyy-MM-dd HH:mm:ss（原 C7/C25 分钟档随立法改判）
         var clock = new FixedClock(new DateTime(2026, 8, 1, 9, 30, 45));
         var args = new FlowData { [FlowConst.UserRealName] = "张三" };
         FlowUtil.AddAutoGenTitle("请假申请", args, clock);
-        Assert.Equal("张三的请假申请-2026-08-01 09:30", args.GetStr(FlowConst.AutoGenTitle));
+        Assert.Equal("张三的请假申请-2026-08-01 09:30:45", args.GetStr(FlowConst.AutoGenTitle));
     }
 
     [Fact]

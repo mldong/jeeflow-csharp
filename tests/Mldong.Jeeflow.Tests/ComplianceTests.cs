@@ -86,7 +86,7 @@ public class ComplianceTests
         var title = inst.Variables.GetStr(FlowConst.AutoGenTitle);
         Assert.NotNull(title);
         Assert.StartsWith("张三的test-flow-", title);
-        Assert.Matches(@"-\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", title);
+        Assert.Matches(@"-\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", title);
     }
 
     [Fact]

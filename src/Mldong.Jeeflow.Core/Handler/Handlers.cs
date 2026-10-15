@@ -38,11 +38,11 @@ public static class FlowUtil
         return taskId.Value;
     }
 
-    /// <summary>自动构造标题：{realName}的{displayName}-{yyyy-MM-dd HH:mm}（C25：HH:mm 非 HH:mm:ss）。</summary>
+    /// <summary>自动构造标题：{realName}的{displayName}-{yyyy-MM-dd HH:mm:ss}（issues/232 R64 拍 A 钉秒；标题专用格式化点，勿并 expire_time 腿）。</summary>
     public static void AddAutoGenTitle(string? displayName, FlowData args, IClock clock)
     {
         var realName = args.GetStr(FlowConst.UserRealName, "");
-        var title = $"{realName}的{displayName}-{clock.Now:yyyy-MM-dd HH:mm}";
+        var title = $"{realName}的{displayName}-{clock.Now:yyyy-MM-dd HH:mm:ss}";
         args[FlowConst.AutoGenTitle] = title;
     }
 
