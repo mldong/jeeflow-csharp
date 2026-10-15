@@ -267,6 +267,8 @@ public class DecisionModel : NodeModel
                     found = true;
                     tm.Enabled = true;
                     await tm.ExecuteAsync(execution);
+                    // issues/234 丙-9：首条真边获胜——命中即走（多真边并行流转非 spec 语义）
+                    break;
                 }
             }
             else if (tm.To != null && tm.To.Equals(nextNodeName, StringComparison.OrdinalIgnoreCase))
@@ -274,6 +276,7 @@ public class DecisionModel : NodeModel
                 found = true;
                 tm.Enabled = true;
                 await tm.ExecuteAsync(execution);
+                break;
             }
         }
 
