@@ -282,13 +282,14 @@ public static class ModelParser
         return nodeModel;
     }
 
-    /// <summary>TaskModel 具名属性键（其余 properties 进 ext——对齐 Java hasField 语义）。</summary>
+    /// <summary>TaskModel 具名属性键（其余 properties 进 ext——issues/231 R63 补 width/height/pre/postInterceptors 四枚：已解析进模型，不得再镜像进 ext）。</summary>
     private static readonly HashSet<string> TaskModelPropertyKeys = new()
     {
         FormKey, AssigneeKey, AssignmentHandleKey, TaskTypeKey, PerformTypeKey,
         ReminderTimeKey, ReminderRepeatKey, ExpireTimeKey, AuthExecuteKey, CallbackKey,
         CandidateHandlerKey, CandidateUsersKey, CandidateGroupsKey,
         CountersignTypeKey, CountersignCompletionConditionKey, ExtFieldKey,
+        WidthKey, HeightKey, PreInterceptorsKey, PostInterceptorsKey,
     };
 
     private static string? Str(Dictionary<string, object?> d, string key) =>
