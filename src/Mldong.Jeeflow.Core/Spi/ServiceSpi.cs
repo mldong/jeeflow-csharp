@@ -62,6 +62,51 @@ public interface IExpressionEvaluator
 public interface ITransactionTemplate
 {
     Task<T> ExecuteInTxAsync<T>(Func<Task<T>> op);
+
+    /// <summary>
+    /// 提交后腿通道（audit8 R77 读法一，spec/12 §12.3.1／issues/234 §4.3）：把回调登记到
+    /// "本次事务提交之后"执行，回滚则整批丢弃。返回 false＝当前没有活动事务（或本实现没这条通道），
+    /// 调用方须自行立即执行——"监听器看到的世界＝已提交"由<b>监听器侧</b>承担，不要求 fire 点搬家
+    /// （参考实现 java 即此形状：事务内 fire＋监听器自取 afterCommit；php 已由 R25 收口同形）。
+    /// 默认实现返回 false，因此既有实现方零改动、行为逐字不变。
+    /// </summary>
+    Task<bool> TryAfterCommitAsync(Func<Task> callback) => Task.FromResult(false);
+}
+
+/// <summary>
+/// 提交后腿登记表（audit8 R77）。由最外层事务作用域持有，嵌套调用并入同一张表；
+/// <see cref="FireAsync"/> 必须在事务上下文已解绑、连接已释放之后调用（否则登记腿的
+/// 反查会踩在已 COMMIT 的连接上）。单条回调自家异常只记录、不外溢主流程。
+/// </summary>
+public sealed class AfterCommitScope
+{
+    private readonly List<Func<Task>> _cbs = new();
+    public bool Done { get; private set; }
+
+    public bool TryAdd(Func<Task> cb)
+    {
+        if (Done) return false;
+        _cbs.Add(cb);
+        return true;
+    }
+
+    public void Discard()
+    {
+        Done = true;
+        _cbs.Clear();
+    }
+
+    public async Task FireAsync()
+    {
+        Done = true;
+        var cbs = _cbs.ToArray();
+        _cbs.Clear();
+        foreach (var cb in cbs)
+        {
+            try { await cb(); }
+            catch (Exception e) { Console.WriteLine($"[jeeflow] afterCommit 回调失败: {e.Message}"); }
+        }
+    }
 }
 
 /// <summary>

@@ -1,5 +1,6 @@
 using Mldong.Jeeflow.Core;
 using MySqlConnector;
+using System.Threading;
 
 namespace Mldong.Jeeflow.Repository.MySql;
 
@@ -13,6 +14,9 @@ public sealed class MySqlTransactionTemplate : ITransactionTemplate
     private readonly MySqlConnectionFactory _factory;
     private readonly MySqlRepository _repository;
     private readonly MySqlExtRepository? _extRepository;
+
+    /// <summary>提交后腿登记表的 ambient（audit8 R77）：与连接绑定分离，最外层事务建一张表。</summary>
+    private readonly AsyncLocal<AfterCommitScope?> _ambientScope = new();
 
     public MySqlTransactionTemplate(
         MySqlConnectionFactory factory, MySqlRepository repository, MySqlExtRepository? extRepository = null)
@@ -32,23 +36,45 @@ public sealed class MySqlTransactionTemplate : ITransactionTemplate
         await using var tx = await conn.BeginTransactionAsync();
         var prev = _repository.AmbientConn.Value;
         var prevTx = _repository.AmbientTx.Value;
+        var prevScope = _ambientScope.Value;
+        var scope = new AfterCommitScope();
         _repository.AmbientConn.Value = conn;
         _repository.AmbientTx.Value = (MySqlTransaction)tx;
+        _ambientScope.Value = scope;
+        var committed = false;
+        T result;
         try
         {
-            var result = await op();
+            result = await op();
             await tx.CommitAsync();
-            return result;
+            committed = true;
         }
         catch
         {
             await tx.RollbackAsync();
+            scope.Discard(); // audit8 R77：回滚 ⇒ 提交后腿整批丢弃（监听器不得看到未提交的世界）
             throw;
         }
         finally
         {
             _repository.AmbientConn.Value = prev;
             _repository.AmbientTx.Value = prevTx;
+            _ambientScope.Value = prevScope;
         }
+        // 提交后腿跑在**连接已解绑**之后（反查走池连接，不踩在刚 COMMIT 的连接上）——
+        // 放在 finally 之后而不是 try 内，就是为了这一条。
+        if (committed) await scope.FireAsync();
+        return result;
+    }
+
+    /// <summary>
+    /// 提交后腿通道（audit8 R77 读法一）：有活动事务 ⇒ 登记并返回 true；
+    /// 无活动事务（或表已 done）⇒ 返回 false，调用方须自行立即执行。
+    /// 嵌套 ExecuteInTxAsync 走上面的 join 支早退 ⇒ 登记始终归最外层那张表。
+    /// </summary>
+    public Task<bool> TryAfterCommitAsync(Func<Task> callback)
+    {
+        var scope = _ambientScope.Value;
+        return Task.FromResult(scope != null && scope.TryAdd(callback));
     }
 }

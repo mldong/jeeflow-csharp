@@ -535,4 +535,18 @@ public class JeeflowEngine
     /// 嵌套进入本方法时由事务模板的 join 支并入最外层，不重复 BEGIN。
     /// </summary>
     public Task<T> InTxAsync<T>(Func<Task<T>> action) => RunInTxAsync(action);
+
+    /// <summary>
+    /// 提交后腿通道（audit8 R77 读法一，spec/12 §12.3.1／issues/234 §4.3）：监听器/集成层用它把
+    /// "必须看到已提交世界"的那一腿（反查、外发通知、二次写）挪到 COMMIT 之后，回滚整批丢弃。
+    /// 模板没实现该能力或没有活动事务 ⇒ 立即执行（"落库后"与"提交后"等价，行为逐字不变）。
+    /// ⚠ 引擎自身的 fire 不经此处：派发点与"监听器随事件拿到动作事务连接"由 145-3 钉住，
+    /// 契约下限由监听器侧承担（java 形状＝事务内 fire＋监听器自取 afterCommit）。
+    /// </summary>
+    public async Task RunAfterCommitAsync(Func<Task> callback)
+    {
+        var tx = _context.TransactionTemplate;
+        if (tx != null && await tx.TryAfterCommitAsync(callback)) return;
+        await callback();
+    }
 }
