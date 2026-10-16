@@ -6,7 +6,9 @@ using MySqlConnector;
 namespace Mldong.Jeeflow.Repository.MySql;
 
 /// <summary>
-/// MySQL 扩展仓储（设计/设计历史/委托代理，14 方法，对齐 JdbcProcessExtRepository）。
+/// MySQL 扩展仓储（设计/设计历史/委托代理三族，对齐 JdbcProcessExtRepository）。
+/// 法数以 <see cref="IProcessExtRepository"/> 的声明条数为准、不在此写死
+/// （audit8 R71：旧文案写"14 方法"，接口现读 13 条——注释里的计数会随契约演进而失真）。
 /// removeDesign 级联删历史（同连接）；listDesignHis 最新在前（id DESC）。
 /// </summary>
 public class MySqlExtRepository : IProcessExtRepository
