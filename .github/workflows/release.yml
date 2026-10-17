@@ -23,6 +23,11 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      # 发版前置 T0（R118）：内存/脚本化模板腿必须先绿。mysql-smoke 组要真库，
+      # CI 不备库，T1 由 RELEASE.md 发版前门票（release-checklist --pre）人工把关。
+      - name: Test (T0, no DB)
+        run: dotnet test tests/Mldong.Jeeflow.Tests/Mldong.Jeeflow.Tests.csproj -c Release --filter "Category!=mysql-smoke"
+
       - name: Pack
         run: |
           ARGS=(./Jeeflow.sln -c Release -o "$PWD/artifacts")
