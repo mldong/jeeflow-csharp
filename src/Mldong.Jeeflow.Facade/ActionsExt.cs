@@ -411,7 +411,9 @@ public partial class JeeflowFacade
             var explicitOperator = PageQuery.NormalizeActorValue(args.GetObj("operator"));
             if (explicitOperator != null) s.Operator = explicitOperator;
         }
-        s.Surrogate = ToStr(args.GetObj("surrogate"));
+        // surrogate 列 NOT NULL（compose 现读）⇒ 缺键清空落空串，不能落 null；
+        // 读侧把 null 与 '' 同档（spec 06 §processSurrogate/update 四腿清空）
+        s.Surrogate = ToStr(args.GetObj("surrogate")) ?? "";
         s.StartTime = ParseTime(args.GetObj("startTime"));
         s.EndTime = ParseTime(args.GetObj("endTime"));
         // 写侧判据（06 §4.5 条款 5「写侧」，与读侧「只有 1 生效」同一套语义）：
