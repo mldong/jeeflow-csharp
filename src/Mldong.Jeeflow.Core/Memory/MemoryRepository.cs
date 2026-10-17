@@ -1,4 +1,5 @@
 using System.Text;
+using System.Linq;
 
 namespace Mldong.Jeeflow.Core;
 
@@ -100,6 +101,9 @@ public class MemoryRepository : IProcessRepository
         Defines.Remove(defineId);
         return Task.CompletedTask;
     }
+
+    public virtual Task<bool> HasInstancesByDefineIdAsync(long defineId)
+        => Task.FromResult(Instances.Values.Any(i => i.DefineId == defineId));
 
     // ═══ 流程实例 ═══
 

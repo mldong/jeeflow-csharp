@@ -108,7 +108,16 @@ public partial class JeeflowFacade
 
     private async Task<Dictionary<string, object?>> DefineRemoveAsync(FlowData args)
     {
-        foreach (var id in IdListArgs(args))
+        var ids = IdListArgs(args).ToList();
+        // audit8 R110：先对整批做存在性校验再删，避免"前面的删了、后面的被拒"的半删。
+        foreach (var id in ids)
+        {
+            if (await _repository.HasInstancesByDefineIdAsync(id))
+            {
+                throw new JeeflowException(WfErr.ExistUnFinishInstance);
+            }
+        }
+        foreach (var id in ids)
         {
             await _repository.RemoveDefineAsync(id);
         }

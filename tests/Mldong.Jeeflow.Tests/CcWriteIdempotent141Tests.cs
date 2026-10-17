@@ -392,6 +392,7 @@ public class CcWriteIdempotent141Tests
         public Task UpdateDefineAsync(ProcessDefine define) => Task.CompletedTask;
         public Task UpdateDefineStateAsync(long defineId, int state) => Task.CompletedTask;
         public Task RemoveDefineAsync(long defineId) => Task.CompletedTask;
+        public Task<bool> HasInstancesByDefineIdAsync(long defineId) => Task.FromResult(false);
         public Task<ProcessInstance?> FindInstanceByIdAsync(long? instanceId) => Task.FromResult<ProcessInstance?>(null);
         public Task SaveInstanceAsync(ProcessInstance instance) => Task.CompletedTask;
         public Task UpdateInstanceAsync(ProcessInstance instance) => Task.CompletedTask;

@@ -190,6 +190,14 @@ public class MySqlRepository : IProcessRepository
             cmd => cmd.Parameters.Add(new MySqlParameter { Value = defineId }));
     }
 
+    public virtual async Task<bool> HasInstancesByDefineIdAsync(long defineId)
+    {
+        await using var lease = await RentAsync();
+        var r = await ScalarAsync(lease.Conn, "SELECT COUNT(*) FROM wf_process_instance WHERE process_define_id=?",
+            cmd => cmd.Parameters.Add(new MySqlParameter { Value = defineId }));
+        return Convert.ToInt64(r ?? 0) > 0;
+    }
+
     // ═══ 流程实例 ═══
 
     public virtual async Task<ProcessInstance?> FindInstanceByIdAsync(long? instanceId)

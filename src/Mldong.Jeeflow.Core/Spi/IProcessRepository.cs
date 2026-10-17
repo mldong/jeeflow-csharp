@@ -19,6 +19,8 @@ public interface IProcessRepository
     Task UpdateDefineStateAsync(long defineId, int state);
     /// <summary>删除流程定义。</summary>
     Task RemoveDefineAsync(long defineId);
+    /// <summary>该定义下是否存在任何实例（含已办结/已撤回）——audit8 R110 删除守卫。</summary>
+    Task<bool> HasInstancesByDefineIdAsync(long defineId);
 
     Task<ProcessInstance?> FindInstanceByIdAsync(long? instanceId);
     Task SaveInstanceAsync(ProcessInstance instance);
