@@ -359,6 +359,18 @@ public static class ReapplySupport
         return id.Value;
     }
 
+    /// <summary>
+    /// 带直返标记的进行中申请待办只接受重新提交（submitType=5）：跳转/血缘回退/拒绝/
+    /// 再次退回四个入口一律在<b>任何状态变更之前</b>拒绝（对齐 java <c>rejectMarkedApplicant</c>）。
+    /// 少了这道守卫，对标记申请待办提交 6 会完成旧申请、建一条无标记新申请 ⇒
+    /// 旧申请的分支等待随之消失，另一支汇合提前放行。
+    /// </summary>
+    public static void RejectMarkedApplicant(ProcessTask? snapshot, string action)
+    {
+        if (snapshot != null && snapshot.IsDoing() && ReapplyOf(snapshot) != null)
+            throw new JeeflowException($"带重提直返标记的申请待办不允许{action}，只接受重新提交(submitType=5)");
+    }
+
     // ═══ 基础转换（JSON 往返后数字可能是 int/long/double/string） ═══
 
     public static long AsLong(object? v) => AsLongObj(v) ?? 0L;

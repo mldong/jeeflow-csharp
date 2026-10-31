@@ -116,13 +116,9 @@ public class JeeflowEngine
     {
         return await RunInTxAsync(async () =>
         {
-            // 带直返标记的申请待办只能按 submitType=5 重提，不得被"跳转到其他节点"绕过
-            var snapshot = await Repository.FindTaskByIdAsync(taskId);
-            if (snapshot != null && snapshot.IsDoing() && ReapplySupport.ReapplyOf(snapshot) != null
-                && !string.IsNullOrEmpty(nodeName))
-            {
-                throw new JeeflowException("带重提直返标记的申请待办不允许跳转到其他节点");
-            }
+            // 带直返标记的申请待办只能按 submitType=5 重提：命名跳转与血缘回退（nodeName 空）
+            // 两档都不得绕过（java `executeAndJumpTask` 同款守卫，覆盖整个入口而非只有命名支）。
+            ReapplySupport.RejectMarkedApplicant(await Repository.FindTaskByIdAsync(taskId), "跳转");
             var exec = await PrepareExecutionAsync(taskId, op, args);
             if (exec == null) return new List<ProcessTask>();
             var model = exec.ProcessModel!;
@@ -163,6 +159,8 @@ public class JeeflowEngine
     {
         return await RunInTxAsync(async () =>
         {
+            // 带直返标记的申请待办不得被"拒绝"直接推到结束（java `executeAndJumpToEnd` 同款守卫）
+            ReapplySupport.RejectMarkedApplicant(await Repository.FindTaskByIdAsync(taskId), "拒绝");
             var exec = await PrepareExecutionAsync(taskId, op, args);
             if (exec == null) return new List<ProcessTask>();
             var model = exec.ProcessModel!;
@@ -193,6 +191,8 @@ public class JeeflowEngine
             // 校验放在任何状态变更之前：来源节点配了 RETURN_TO_SOURCE 时，先读模型判准入
             // （非法配置/不支持的形状不得先完成任务、先发通知）。
             var snapshot = await Repository.FindTaskByIdAsync(taskId);
+            // 带直返标记的申请待办不得被"再次退回"重建一条无标记申请（那会丢掉本轮分支等待）
+            ReapplySupport.RejectMarkedApplicant(snapshot, "再次退回");
             TaskModel? sourceNode = null;
             ProcessModel? sourceModel = null;
             if (snapshot != null && snapshot.IsDoing())

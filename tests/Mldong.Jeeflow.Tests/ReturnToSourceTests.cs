@@ -390,4 +390,46 @@ public class ReturnToSourceTests
             System.Text.Encoding.UTF8.GetBytes(TestInfra.LoadFlow("02-multi-task")), ctx);
         Assert.All(plain.Tasks, t => Assert.Equal(WfReapplyMode.Normal, t.ReapplyMode));
     }
+
+    // ═══ 负向：带标记申请待办不得走其他办理/跳转入口（java `test16` 同款） ═══
+
+    [Fact]
+    public async Task MarkedApplicantRejectsReturnAndJumps()
+    {
+        var (engine, repo) = TestInfra.NewEngine();
+        var iid = await StartAsync(engine, repo, "rts14guard", "14-return-to-source");
+        var taskA = await TestInfra.FindDoingForAsync(repo, iid, "userA");
+        await engine.ExecuteAndJumpToFirstTaskNodeAsync(taskA.TaskId!.Value, "userA", Submit(Return));
+        var apply = await TestInfra.FindDoingForAsync(repo, iid, "applicant");
+        var doingBefore = (await DoingAsync(repo, iid)).Count;
+        var histBefore = (await repo.FindHistoryTasksAsync(iid)).Count;
+
+        async Task AssertMarked(Func<Task> act)
+        {
+            var ex = await Assert.ThrowsAsync<JeeflowException>(act);
+            Assert.Contains("只接受重新提交", ex.Message);
+        }
+
+        await AssertMarked(() => engine.ExecuteAndJumpToFirstTaskNodeAsync(
+            apply.TaskId!.Value, "applicant", Submit(Return)));
+        await AssertMarked(() => engine.ExecuteAndJumpTaskAsync(
+            apply.TaskId!.Value, "applicant", Submit((int)WfSubmitType.Rollback), null));
+        await AssertMarked(() => engine.ExecuteAndJumpTaskAsync(
+            apply.TaskId!.Value, "applicant", Submit((int)WfSubmitType.Jump), "taskB"));
+        await AssertMarked(() => engine.ExecuteAndJumpToEndAsync(
+            apply.TaskId!.Value, "applicant", Submit((int)WfSubmitType.Reject)));
+
+        // 四个入口都在状态变更之前拒绝：不新增待办、不新增历史行、原等待上下文与来源完成态保留
+        Assert.Equal(doingBefore, (await DoingAsync(repo, iid)).Count);
+        Assert.Equal(histBefore, (await repo.FindHistoryTasksAsync(iid)).Count);
+        var still = await repo.FindTaskByIdAsync(apply.TaskId);
+        Assert.True(still!.IsDoing());
+        Assert.Equal(taskA.TaskId.Value.ToString(),
+            ReapplySupport.ReapplyOf(still)!["sourceTaskId"]?.ToString());
+        Assert.Single(await HistoryOfAsync(repo, iid, "taskA"));
+
+        // 正常重提仍然可用
+        await engine.ExecuteProcessTaskAsync(apply.TaskId!.Value, "applicant", Submit(Reapply));
+        Assert.Contains(await DoingAsync(repo, iid), t => t.TaskName == "taskA");
+    }
 }
