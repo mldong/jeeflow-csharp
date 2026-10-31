@@ -234,12 +234,27 @@ public class CreateTaskHandler : IHandler
 
         execution.AddTasks(tasks);
 
+        // 分支归属（「退回修改、重提直返」）：按父任务血缘＋模型静态范围推导，
+        // 落任务变量保留键 _branchCtx，供汇合判据识别「来源分支是否仍未完成」。
+        // 建单这一刻 taskId 尚未分配（SaveTaskAsync 才给），分支根的 root 先落 0，
+        // 由引擎在落库后回填（ReapplySupport.FillRootSelf）。
+        foreach (var task in tasks)
+        {
+            ReapplySupport.PutScopes(task, ReapplySupport.BuildScopes(
+                execution.ProcessTask, model, _taskModel.Name, task.TaskId));
+        }
+
         // 执行注册的拦截器池（有序）
         foreach (var interceptor in execution.Context.Interceptors)
             await interceptor.Run(execution);
     }
 
-    private static async Task<List<string>> ResolveActorsAsync(
+    /// <summary>
+    /// 参与人解析（tf_nextNodeOperator → assignee 字面量/变量（applicant→发起人）→ assignmentHandler）。
+    /// <para>引擎的「重提直返」腿要按来源节点重新算参与者，故与 <see cref="HandleAsync"/> 共用本方法
+    /// （对齐 Java <c>CreateTaskHandler.resolveActors</c> 的 public static 形状）。</para>
+    /// </summary>
+    internal static async Task<List<string>> ResolveActorsAsync(
         TaskModel taskModel, ProcessModel model, Execution execution)
     {
         var actors = new List<string>();

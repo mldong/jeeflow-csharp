@@ -77,8 +77,16 @@ public class EndProcessHandler : IHandler
 }
 
 /// <summary>
-/// 合并分支处理器（对齐 Java MergeBranchHandler）：无进行中任务 → merged；
-/// 否则检查本合并节点输入分支是否还有进行中任务。
+/// 合并分支处理器（对齐 Java MergeBranchHandler）——判据分两档：
+/// <list type="bullet">
+///   <item><b>有分支归属</b>（到达任务变量 <c>_branchCtx</c> 含本汇合点）：按本轮 round 统计全部分支根，
+///       任一根下仍有进行中任务、或任一根有进行中的申请待办携带匹配的修改等待，都不放行。
+///       申请人回到分叉之外修改时，那条申请任务不叫任何分支节点名，靠等待关系仍被算作
+///       「该分支未完成」——这是旧的按节点名扫描做不到的。</item>
+///   <item><b>无分支归属</b>（存量任务 / 未配 fork–join 的流）：回落旧判据——实例无进行中任务，
+///       或输入源节点无进行中任务。</item>
+/// </list>
+/// <para>一次性放行由调用方在实例锁内完成（<see cref="InstanceLock"/>），本处理器只做判定。</para>
 /// </summary>
 public class MergeBranchHandler : IHandler
 {
@@ -88,26 +96,74 @@ public class MergeBranchHandler : IHandler
 
     public Task HandleAsync(Execution execution)
     {
-        var instance = execution.ProcessInstance!;
-        var doingTasks = instance.GetDoingTasks();
-        execution.IsMerged = doingTasks.Count == 0;
+        execution.IsMerged = ComputeMerged(execution);
+        return Task.CompletedTask;
+    }
 
-        if (!execution.IsMerged)
+    private bool ComputeMerged(Execution execution)
+    {
+        var instance = execution.ProcessInstance!;
+        var arriving = execution.ProcessTask;
+        var joinName = _joinModel.Name;
+        var arrivingScope = arriving == null
+            ? null
+            : ReapplySupport.FindScope(ReapplySupport.ScopesOf(arriving), joinName);
+        if (arrivingScope == null) return LegacyMerged(instance);
+        var fork = ReapplySupport.AsStr(
+            arrivingScope.TryGetValue(ReapplySupport.KeyFork, out var fv) ? fv : null);
+        var round = ReapplySupport.AsLong(
+            arrivingScope.TryGetValue(ReapplySupport.KeyRound, out var rv) ? rv : null);
+
+        // root → 是否仍阻塞（true=未完成）
+        var roots = new Dictionary<long, bool>();
+        foreach (var task in instance.Tasks)
         {
-            var hasActive = false;
-            foreach (var input in _joinModel.Inputs)
+            var scope = ReapplySupport.FindScope(ReapplySupport.ScopesOf(task), joinName);
+            var inRound = scope != null
+                && fork != null
+                && fork == ReapplySupport.AsStr(scope.TryGetValue(ReapplySupport.KeyFork, out var sf) ? sf : null)
+                && ReapplySupport.AsLong(scope.TryGetValue(ReapplySupport.KeyRound, out var sr) ? sr : null) == round;
+            if (inRound)
             {
-                var sourceName = input.Source?.Name;
-                if (sourceName == null) continue;
-                if (doingTasks.Any(t => sourceName == t.TaskName))
+                var rootKey = ReapplySupport.AsLong(
+                    scope!.TryGetValue(ReapplySupport.KeyRoot, out var srt) ? srt : null);
+                roots[rootKey] = roots.TryGetValue(rootKey, out var prev) && prev;
+            }
+            if (!task.IsDoing()) continue;
+            if (inRound)
+            {
+                roots[ReapplySupport.AsLong(
+                    scope!.TryGetValue(ReapplySupport.KeyRoot, out var srt2) ? srt2 : null)] = true;
+            }
+            // 该分支正在申请人手里修改：申请任务本身不在分支节点名集合里，必须按等待关系计入
+            foreach (var b in ReapplySupport.BranchOf(ReapplySupport.ReapplyOf(task)))
+            {
+                if (joinName == ReapplySupport.AsStr(b.TryGetValue(ReapplySupport.KeyJoin, out var bj) ? bj : null)
+                    && fork != null
+                    && fork == ReapplySupport.AsStr(b.TryGetValue(ReapplySupport.KeyFork, out var bf) ? bf : null)
+                    && ReapplySupport.AsLong(b.TryGetValue(ReapplySupport.KeyRound, out var br) ? br : null) == round)
                 {
-                    hasActive = true;
-                    break;
+                    roots[ReapplySupport.AsLong(
+                        b.TryGetValue(ReapplySupport.KeyRoot, out var broot) ? broot : null)] = true;
                 }
             }
-            execution.IsMerged = !hasActive;
         }
-        return Task.CompletedTask;
+        if (roots.Count == 0) return LegacyMerged(instance);
+        return !roots.Values.Any(v => v);
+    }
+
+    /// <summary>存量/无归属任务的旧判据：进行中任务里没有本汇合点输入源节点的任务即可合并。</summary>
+    private bool LegacyMerged(ProcessInstance instance)
+    {
+        var doingTasks = instance.GetDoingTasks();
+        if (doingTasks.Count == 0) return true;
+        foreach (var input in _joinModel.Inputs)
+        {
+            var sourceName = input.Source?.Name;
+            if (sourceName == null) continue;
+            if (doingTasks.Any(t => sourceName == t.TaskName)) return false;
+        }
+        return true;
     }
 }
 

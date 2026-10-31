@@ -199,6 +199,13 @@ public class TaskModel : NodeModel
     public WfCountersignType? CountersignType { get; set; }
     public string? CountersignCompletionCondition { get; set; }
 
+    /// <summary>
+    /// 退回发起人后的重提方式（properties.reapplyMode；缺省 <see cref="WfReapplyMode.Normal"/>）。
+    /// <see cref="WfReapplyMode.ReturnToSource"/> ⇒ 退回时建的申请待办在重提后直接回到本节点，
+    /// 不重放申请节点出边、不重算来源前条件（「退回修改、重提直返」）。
+    /// </summary>
+    public WfReapplyMode ReapplyMode { get; set; } = WfReapplyMode.Normal;
+
     internal override async Task ExecAsync(Execution execution)
     {
         if (PerformType == WfPerformType.Countersign)

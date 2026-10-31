@@ -84,12 +84,17 @@ public class JeeflowEngine
     // ═══ 执行任务 ═══
 
     public Task<List<ProcessTask>> ExecuteProcessTaskAsync(long taskId, string? op, FlowData args) =>
-        RunInGateAsync(() => ExecuteProcessTaskInTxAsync(taskId, op, args));
+        RunInGateAsync(() => RunInInstanceLockAsync(taskId,
+            () => ExecuteProcessTaskInTxAsync(taskId, op, args)));
 
     private async Task<List<ProcessTask>> ExecuteProcessTaskInTxAsync(long taskId, string? op, FlowData args)
     {
         return await RunInTxAsync(async () =>
         {
+            // 「退回修改、重提直返」：申请待办带直返上下文 ⇒ 走直返腿（只接受 submitType=5）
+            var snapshot = await Repository.FindTaskByIdAsync(taskId);
+            if (snapshot != null && snapshot.IsDoing() && ReapplySupport.ReapplyOf(snapshot) != null)
+                return await ExecuteReapplyAsync(snapshot, op, args);
             var exec = await PrepareExecutionAsync(taskId, op, args);
             if (exec == null) return new List<ProcessTask>();
             var model = exec.ProcessModel!;
@@ -111,6 +116,13 @@ public class JeeflowEngine
     {
         return await RunInTxAsync(async () =>
         {
+            // 带直返标记的申请待办只能按 submitType=5 重提，不得被"跳转到其他节点"绕过
+            var snapshot = await Repository.FindTaskByIdAsync(taskId);
+            if (snapshot != null && snapshot.IsDoing() && ReapplySupport.ReapplyOf(snapshot) != null
+                && !string.IsNullOrEmpty(nodeName))
+            {
+                throw new JeeflowException("带重提直返标记的申请待办不允许跳转到其他节点");
+            }
             var exec = await PrepareExecutionAsync(taskId, op, args);
             if (exec == null) return new List<ProcessTask>();
             var model = exec.ProcessModel!;
@@ -170,30 +182,159 @@ public class JeeflowEngine
 
     public Task<List<ProcessTask>> ExecuteAndJumpToFirstTaskNodeAsync(
         long taskId, string? op, FlowData args) =>
-        RunInGateAsync(() => ExecuteAndJumpToFirstTaskNodeInTxAsync(taskId, op, args));
+        RunInGateAsync(() => RunInInstanceLockAsync(taskId,
+            () => ExecuteAndJumpToFirstTaskNodeInTxAsync(taskId, op, args)));
 
     private async Task<List<ProcessTask>> ExecuteAndJumpToFirstTaskNodeInTxAsync(
         long taskId, string? op, FlowData args)
     {
         return await RunInTxAsync(async () =>
         {
+            // 校验放在任何状态变更之前：来源节点配了 RETURN_TO_SOURCE 时，先读模型判准入
+            // （非法配置/不支持的形状不得先完成任务、先发通知）。
+            var snapshot = await Repository.FindTaskByIdAsync(taskId);
+            TaskModel? sourceNode = null;
+            ProcessModel? sourceModel = null;
+            if (snapshot != null && snapshot.IsDoing())
+            {
+                var instance0 = await Repository.FindInstanceByIdAsync(snapshot.ProcessInstanceId);
+                if (instance0 != null)
+                {
+                    var define0 = await Repository.FindDefineByIdAsync(instance0.DefineId);
+                    if (define0 != null)
+                    {
+                        sourceModel = ModelParser.Parse(define0.Content, _context);
+                        sourceNode = sourceModel.GetNode(snapshot.TaskName) as TaskModel;
+                    }
+                }
+            }
+            var direct = sourceNode != null && sourceNode.ReapplyMode == WfReapplyMode.ReturnToSource;
+            if (direct) ValidateReturnToSource(sourceModel!, sourceNode!);
+
             var exec = await PrepareExecutionAsync(taskId, op, args);
             if (exec == null) return new List<ProcessTask>();
             var model = exec.ProcessModel!;
-            var start = model.GetStart();
-            if (start != null)
+            if (direct)
             {
-                foreach (var tm in start.Outputs)
+                CreateReturnToSourceApplication(exec, sourceNode!, snapshot!);
+            }
+            else
+            {
+                var start = model.GetStart();
+                if (start != null)
                 {
-                    tm.Enabled = true;
-                    if (tm.Target is TaskModel target)
-                        target.Assignee = exec.ProcessInstance!.Operator;
-                    await tm.ExecuteAsync(exec);
+                    foreach (var tm in start.Outputs)
+                    {
+                        tm.Enabled = true;
+                        if (tm.Target is TaskModel target)
+                            target.Assignee = exec.ProcessInstance!.Operator;
+                        await tm.ExecuteAsync(exec);
+                    }
                 }
             }
             await PersistTasksAsync(exec);
             return exec.ProcessTaskList;
         });
+    }
+
+    // ═══ 退回修改、重提直返 ═══
+
+    /// <summary>来源节点配置了 RETURN_TO_SOURCE 时的准入校验（不改任何状态）。</summary>
+    private static void ValidateReturnToSource(ProcessModel model, TaskModel sourceNode)
+    {
+        if (sourceNode.PerformType == WfPerformType.Countersign)
+            throw new JeeflowException($"会签节点[{sourceNode.Name}]不支持退回修改直返");
+        if (FlowUtil.IsFirstTaskName(model, sourceNode.Name))
+            throw new JeeflowException($"申请节点[{sourceNode.Name}]不能配置重提直返");
+        if (FirstTaskModel(model) == null)
+            throw new JeeflowException("流程定义缺少申请节点，无法退回发起人");
+    }
+
+    /// <summary>
+    /// submitType=6 的直返落点：完成来源任务（<see cref="PrepareExecutionAsync"/> 已做）后，
+    /// 在原实例里给发起人建一条申请待办，并把本次退回绑定写进任务变量；
+    /// <b>不重放来源出边、不重触发分叉</b>。
+    /// </summary>
+    private void CreateReturnToSourceApplication(Execution exec, TaskModel sourceNode, ProcessTask sourceTask)
+    {
+        var instance = exec.ProcessInstance!;
+        var applyModel = FirstTaskModel(exec.ProcessModel!);
+        if (applyModel == null)
+            throw new JeeflowException("流程定义缺少申请节点，无法退回发起人");
+        var operatorId = instance.Operator ?? sourceTask.CreateUser ?? "";
+        var appTask = instance.CreateTask(applyModel, applyModel.DisplayName,
+            new List<string> { operatorId },
+            instance.Operator, sourceTask.TaskId, true, _context.ClockOrDefault);
+        ReapplySupport.PutScopes(appTask, ReapplySupport.EmptyScopes());
+        ReapplySupport.PutReapply(appTask, ReapplySupport.NewReapplyContext(
+            ReapplySupport.ModeReturnToSource, sourceTask.TaskId, sourceNode.Name,
+            ReapplySupport.ScopesOf(sourceTask)));
+        exec.AddTask(appTask);
+    }
+
+    /// <summary>
+    /// submitType=5 且申请待办带直返上下文：校验来源后，在来源节点直接建新待办。
+    /// 不执行申请节点出边（不重算来源前条件、不重触发分叉），也不执行来源节点出边。
+    /// </summary>
+    private async Task<List<ProcessTask>> ExecuteReapplyAsync(
+        ProcessTask applyTask, string? op, FlowData args)
+    {
+        args = ReapplySupport.StripReserved(args);
+        var submitType = args.GetInt(FlowConst.SubmitType) ?? (int)WfSubmitType.ReApply;
+        if (submitType != (int)WfSubmitType.ReApply)
+            throw new JeeflowException("带重提直返标记的申请待办只接受重新提交(submitType=5)");
+
+        var instance = await Repository.FindInstanceByIdAsync(applyTask.ProcessInstanceId);
+        if (instance == null) throw new JeeflowException("流程实例不存在");
+        var define = await Repository.FindDefineByIdAsync(instance.DefineId);
+        if (define == null) throw new JeeflowException(WfErr.NotFoundProcessDefine);
+        var model = ModelParser.Parse(define.Content, _context);
+
+        var ctx = ReapplySupport.ReapplyOf(applyTask)!;
+        var sourceTaskId = ReapplySupport.RequireSourceTaskId(ctx);
+        ProcessTask? source = null;
+        foreach (var t in instance.Tasks)
+        {
+            if (t.TaskId == sourceTaskId)
+            {
+                source = t;
+                break;
+            }
+        }
+        if (source == null || !source.IsFinished())
+            throw new JeeflowException("重提直返来源任务无效或未完成");
+        if (model.GetNode(source.TaskName) is not TaskModel sourceModel
+            || sourceModel.ReapplyMode != WfReapplyMode.ReturnToSource)
+        {
+            throw new JeeflowException("重提直返来源节点配置已变更，拒绝执行");
+        }
+        if (!FlowUtil.IsFirstTaskName(model, applyTask.TaskName))
+            throw new JeeflowException("重提直返必须从申请待办发起");
+
+        var exec = await PrepareExecutionAsync(applyTask.TaskId!.Value, op, args);
+        if (exec == null) return new List<ProcessTask>();
+        // 遗留的下一节点指定人参数不得影响本次建单（历史记录不删）
+        exec.Args.Remove(FlowConst.NextNodeOperator);
+        var actors = await CreateTaskHandler.ResolveActorsAsync(sourceModel, model, exec);
+        if (actors.Count == 0)
+            throw new JeeflowException($"目标节点[{sourceModel.Name}]没有可用参与者，重提已回滚");
+        var branch = ReapplySupport.BranchOf(ctx);
+        var newTask = exec.ProcessInstance!.CreateTask(sourceModel, sourceModel.DisplayName, actors,
+            op, applyTask.TaskId, false, _context.ClockOrDefault);
+        ReapplySupport.PutScopes(newTask, branch);
+        exec.AddTask(newTask);
+        await PersistTasksAsync(exec);
+        return exec.ProcessTaskList;
+    }
+
+    /// <summary>申请节点（开始节点的直接后继任务节点）。</summary>
+    private static TaskModel? FirstTaskModel(ProcessModel model)
+    {
+        foreach (var t in model.Tasks)
+        {
+            if (FlowUtil.IsFirstTaskName(model, t.Name)) return t;
+        }
+        return null;
     }
 
     // ═══ 内部方法 ═══
@@ -203,6 +344,9 @@ public class JeeflowEngine
     /// </summary>
     private async Task<Execution?> PrepareExecutionAsync(long taskId, string? op, FlowData args)
     {
+        // 引擎控制键（_branchCtx / _reapplyContext）只能由引擎写：客户端传进来的一律就地剥掉
+        // （伪造"申请待办"标记或伪造分支归属都不得改变路由/血缘），对齐 Java prepareExecution。
+        args = ReapplySupport.StripReserved(args);
         var task = await Repository.FindTaskByIdAsync(taskId);
         if (task == null || !task.IsDoing())
             throw new JeeflowException(WfErr.NotFoundDoingProcessTask);
@@ -281,6 +425,11 @@ public class JeeflowEngine
         {
             await ApplySurrogateAsync(exec, task);
             await Repository.SaveTaskAsync(task);
+            // 分支根任务建单时自身 taskId 尚未生成（SaveTaskAsync 才分配）⇒ _branchCtx.root 先落 0，
+            // 落库后回填并补一次 UPDATE（对齐 Java saveNewTask 的两拍；不补就是"分支根的等待关系
+            // 永远对不上"，汇合判据会把它当成另一档）。
+            if (ReapplySupport.FillRootSelf(task))
+                await Repository.UpdateTaskAsync(task);
             // TASK_START 在落库（分配 taskId）后 fire（spec §4.4 / issues/13）
             await NotifyTaskStartAsync(task);
         }
@@ -520,6 +669,17 @@ public class JeeflowEngine
             _cmdGate.Release();
         }
     }
+
+    /// <summary>
+    /// 同一实例串行化（<see cref="InstanceLock"/>）：两个"按任务办理"的入口——常规办理与
+    /// 退发起人（jumpToFirstTaskNode）——都要在<b>同一临界区</b>里「重验状态 → 建后继任务」，
+    /// 否则"汇合一次性放行""退回与另一支交错"会各读各的旧快照。
+    /// <para>锁按任务所属实例取（先读任务行拿实例 id，任务不存在退化为实例 0），
+    /// 排在引擎命令闸门之内，解锁后仍在外层命令闸门内完成事务提交。</para>
+    /// <para><b>边界：仅单进程部署</b>成立；多进程需仓储侧分布式锁（见 <see cref="InstanceLock"/>）。</para>
+    /// </summary>
+    private Task<T> RunInInstanceLockAsync<T>(long taskId, Func<Task<T>> action) =>
+        InstanceLock.RunAsync(Repository, taskId, action);
 
     private async Task<T> RunInTxAsync<T>(Func<Task<T>> action)
     {

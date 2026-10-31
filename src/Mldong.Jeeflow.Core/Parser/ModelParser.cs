@@ -32,6 +32,8 @@ public static class ModelParser
     public const string CandidateHandlerKey = "candidateHandler";
     public const string CountersignTypeKey = "countersignType";
     public const string CountersignCompletionConditionKey = "countersignCompletionCondition";
+    /// <summary>退回发起人后的重提方式（NORMAL 缺省 / RETURN_TO_SOURCE；非法值解析期报错）。</summary>
+    public const string ReapplyModeKey = ReapplySupport.PropReapplyMode;
     public const string ClassKey = "clazz";
     public const string MethodNameKey = "methodName";
     public const string ArgsKey = "args";
@@ -239,6 +241,9 @@ public static class ModelParser
                 task.CandidateHandler = Str(properties, CandidateHandlerKey);
                 task.CountersignType = Enums.CountersignTypeCodeOf(Str(properties, CountersignTypeKey));
                 task.CountersignCompletionCondition = Str(properties, CountersignCompletionConditionKey);
+                // 退回发起人后的重提方式：缺省 NORMAL，非法值在解析期报配置错误（不静默当缺省）
+                task.ReapplyMode = ReapplySupport.ParseMode(
+                    Obj(properties, ReapplyModeKey), task.Name);
                 // 候选人（v1.6.0 对齐 Go/Python/Node：顶层 candidateUsers/candidateGroups）
                 var candUsers = Str(properties, CandidateUsersKey);
                 var candGroups = Str(properties, CandidateGroupsKey);
@@ -290,6 +295,7 @@ public static class ModelParser
         CandidateHandlerKey, CandidateUsersKey, CandidateGroupsKey,
         CountersignTypeKey, CountersignCompletionConditionKey, ExtFieldKey,
         WidthKey, HeightKey, PreInterceptorsKey, PostInterceptorsKey,
+        ReapplyModeKey,
     };
 
     private static string? Str(Dictionary<string, object?> d, string key) =>
