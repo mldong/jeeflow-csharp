@@ -432,8 +432,19 @@ public partial class JeeflowFacade
         var instanceExt = ParseJsonMap(r.InstanceVariable);
         var ext = ParseJsonMap(r.Variable);
         // issues/121 P1：引擎建单必写的控制键不算「任务变量非空」，否则新建任务的 ext
-        // 永远不再回退实例变量（issues/82-3 既有契约）。
-        if (ext.Count == 0 || (ext.Count == 1 && ext.ContainsKey("isFirstTaskNode"))) ext = instanceExt;
+        // 永远不再回退实例变量（issues/82-3 既有契约）。控制键集合除行级首节点标记外，还含
+        // spec 04 的两枚直返保留键（建单时无条件写入、空分支也写 []）——不认它们，每条任务行
+        // 都从此不再回退，且内部键直接从公开出口透出（本轮八栈齐漏，php 的内容级用例才报红）。
+        // `_reapplyContext` 是前端「重新提交后返回：X」的唯一取数口（jeeflow-ui helpers.ts 读
+        // ext._reapplyContext）⇒ 回退后原样合回。合回必须落在**副本**上：instanceExt 是同一
+        // 响应里的另一个出口，不能被任务侧的键污染。
+        if (ReapplySupport.HasOnlyControlKeys(ext))
+        {
+            var fallback = new Dictionary<string, object?>(instanceExt);
+            if (ext.TryGetValue(ReapplySupport.VarReapplyCtx, out var reapplyCtx))
+                fallback[ReapplySupport.VarReapplyCtx] = reapplyCtx;
+            ext = fallback;
+        }
         return new Dictionary<string, object?>
         {
             ["id"] = r.Id,

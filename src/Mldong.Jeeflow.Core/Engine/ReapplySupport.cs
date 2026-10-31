@@ -371,6 +371,18 @@ public static class ReapplySupport
             throw new JeeflowException($"带重提直返标记的申请待办不允许{action}，只接受重新提交(submitType=5)");
     }
 
+    /// <summary>
+    /// 任务变量是否只剩引擎建单必写的控制键（issues/121 P1 的判据体）：行级首节点标记 ＋
+    /// spec 04 的两枚直返保留键。空表也算（原 {@code ext.Count == 0} 那一档）。
+    /// 不认这两枚，每条任务行的 ext 都从此不再回退实例变量、内部键还从公开出口透出。
+    /// </summary>
+    public static bool HasOnlyControlKeys(Dictionary<string, object?> vars)
+    {
+        foreach (var k in vars.Keys)
+            if (k != "isFirstTaskNode" && k != VarBranchCtx && k != VarReapplyCtx) return false;
+        return true;
+    }
+
     // ═══ 基础转换（JSON 往返后数字可能是 int/long/double/string） ═══
 
     public static long AsLong(object? v) => AsLongObj(v) ?? 0L;
