@@ -491,14 +491,13 @@ public partial class JeeflowFacade
     {
         if (node == null || visited.Contains(node.Name!)) return;
         visited.Add(node.Name!);
-        foreach (var tm in node.Outputs)
+        // issues/241：决策节点选边以任务行佐证为准（活跃目标 → 有任务行的目标），
+        // 一条佐证都没有才回落到按当前实例变量求值
+        var outputs = node is DecisionModel
+            ? await SelectDecisionOutputsAsync((DecisionModel)node, node.Outputs, active, instanceVars, historyTasks)
+            : node.Outputs;
+        foreach (var tm in outputs)
         {
-            // 决策节点：输出边表达式求值过滤——false 分支未实际执行，不收集进高亮路径
-            if (node is DecisionModel && !string.IsNullOrEmpty(tm.Expr)
-                                    && !await EvalDecisionExprAsync((DecisionModel)node, tm, instanceVars, historyTasks))
-            {
-                continue;
-            }
             var edgeName = tm.Name;
             if (edgeName != null && !edges.Contains(edgeName)) edges.Add(edgeName);
             var next = tm.Target;
@@ -508,6 +507,45 @@ public partial class JeeflowFacade
             if (active.Contains(next.Name!)) continue; // 遇活跃节点停止深入
             await CollectPathAsync(next, active, history, edges, visited, instanceVars, historyTasks);
         }
+    }
+
+    /// <summary>issues/241：决策节点选边——先按表达式求值（issues/06/153 旧口径），
+    /// **当表达式给出的非空结果与任务行佐证相矛盾时，以任务行为准**；求值失败/零命中时保持
+    /// 既有降级面（issues/164/201 的口径不被本规则改写）。
+    /// 直返单重提后实例变量已改，按当前值重放会选出没走过的分支；走过的分支在任务表里有行。</summary>
+    private async Task<List<TransitionModel>> SelectDecisionOutputsAsync(
+        DecisionModel decision, List<TransitionModel> outputs, List<string> active,
+        FlowData instanceVars, List<ProcessTask> historyTasks)
+    {
+        var selected = new List<TransitionModel>();
+        foreach (var tm in outputs)
+        {
+            if (string.IsNullOrEmpty(tm.Expr)
+                || await EvalDecisionExprAsync(decision, tm, instanceVars, historyTasks))
+            {
+                selected.Add(tm);
+            }
+        }
+        if (selected.Count == 0) return selected;
+        var taskNames = new HashSet<string>(historyTasks.Select(t => t.TaskName));
+        foreach (var tm in selected)
+        {
+            var name = tm.Target?.Name;
+            if (name == null) continue;
+            if (active.Contains(name) || taskNames.Contains(name)) return selected; // 与执行事实一致
+        }
+        var activeHits = new List<TransitionModel>();
+        var evidenced = new List<TransitionModel>();
+        foreach (var tm in outputs)
+        {
+            var name = tm.Target?.Name;
+            if (name == null) continue;
+            if (active.Contains(name)) activeHits.Add(tm);
+            if (taskNames.Contains(name)) evidenced.Add(tm);
+        }
+        if (activeHits.Count > 0) return activeHits;
+        if (evidenced.Count > 0) return evidenced;
+        return selected;
     }
 
     /// <summary>决策输出边表达式求值：args = 实例变量 + 决策前置任务变量（与引擎运行时同源）。</summary>
