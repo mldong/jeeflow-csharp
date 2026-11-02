@@ -90,7 +90,9 @@ public class PersistPostInterceptor : IFlowInterceptor
         var data = ExtractFields(instance,
             !exists ? null : fieldPerm,
             includeTaskFields: !exists || taskNode,
-            includeFormFields: !exists || taskNode);
+            includeFormFields: !exists || taskNode,
+            // tf_ 那半条腿的取值源＝本次提交那条任务行（根因条款已把 tf_ 从实例变量摘走，见 ExtractFields 注释）
+            execution.ProcessTask?.Variables);
 
         // 状态字段：优先 {节点ID}_{状态码} 列，无则 {节点ID} 列。
         // 任务节点写 DOING(10)；结束节点写最终状态（FINISHED/REJECT）。
@@ -145,9 +147,23 @@ public class PersistPostInterceptor : IFlowInterceptor
         return null;
     }
 
-    /// <summary>提取字段：f_ 去前缀（SYNC 按权限过滤）；tf_ 去前缀冗余（有列则写）。</summary>
+    /// <summary>
+    /// 提取字段：f_ 去前缀（SYNC 按权限过滤）；tf_ 去前缀冗余（有列则写）。
+    /// <para><b>tf_ 的取值源是「本次提交那条任务行」，不是实例变量</b>（规范 04「流程变量约定」末注
+    /// 的根因条款把 <c>tf_*</c> 控制键从实例变量里摘掉了——整包合并会让上一轮的
+    /// <c>tf_addSignOperators</c>／<c>tf_nextNodeOperator</c> 跨请求复活，<c>tf_approvalComment</c>
+    /// 更会把某个人的审批意见污染成全流程可读的变量）。条款同时写明
+    /// <b>任务行留痕不受影响（完成时仍收整包参数）</b>，所以"有列则写"的那半条契约照旧成立，
+    /// 只是数据要从 <see cref="ProcessTask.Variables"/> 取——这一档 java 的
+    /// <c>PersistPostInterceptor</c> 仍只读 <c>instance.getVariables()</c> 且没有用例钉住，
+    /// 本栈的 <c>PersistSmokeTests.T1M4_SyncFieldPermissionNotWrittenThrough</c> 钉住了，
+    /// 于是本栈先照出这条腿（差异与待传播项见回报）。</para>
+    /// <para>两源都过同一个 <paramref name="includeTaskFields"/> 闸；任务行的值覆盖实例变量的同名键
+    /// （实例变量在根因修复后本就不该再有 tf_，留着这条覆盖只为老数据形状不塌）。</para>
+    /// </summary>
     private static Dictionary<string, object?> ExtractFields(
-        ProcessInstance instance, FlowData? fieldPerm, bool includeTaskFields, bool includeFormFields)
+        ProcessInstance instance, FlowData? fieldPerm, bool includeTaskFields, bool includeFormFields,
+        FlowData? taskRowVariables = null)
     {
         var data = new Dictionary<string, object?>();
         var variables = instance.Variables;
@@ -166,6 +182,19 @@ public class PersistPostInterceptor : IFlowInterceptor
                 }
                 else if (includeTaskFields && key.StartsWith(TaskFieldPrefix, StringComparison.Ordinal)
                                              && key.Length > TaskFieldPrefix.Length)
+                {
+                    data[key[TaskFieldPrefix.Length..]] = kv.Value;
+                }
+            }
+        }
+        if (includeTaskFields && taskRowVariables != null)
+        {
+            foreach (var kv in taskRowVariables)
+            {
+                var key = kv.Key;
+                if (key == null) continue;
+                if (key.StartsWith(TaskFieldPrefix, StringComparison.Ordinal)
+                    && key.Length > TaskFieldPrefix.Length)
                 {
                     data[key[TaskFieldPrefix.Length..]] = kv.Value;
                 }

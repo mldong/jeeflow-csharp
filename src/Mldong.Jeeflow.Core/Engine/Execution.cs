@@ -101,4 +101,16 @@ public class Execution
 
     public List<ProcessTask> GetDoingTaskList() =>
         ProcessTaskList.Where(t => t.TaskState == (int)WfTaskState.Doing).ToList();
+
+    /// <summary>
+    /// 本次请求点名的后加签办理人（规范 04 · 后加签（可重复））。
+    /// <para><b>为什么单独带一个字段，而不是让处理器读 <see cref="Args"/></b>：<see cref="Args"/> 是
+    /// 「实例变量 + 本次参数」的合并结果，而 <see cref="ProcessInstance.CompleteTask"/> 历史上会把
+    /// 整包提交参数并进<b>实例变量</b> ⇒ 上一轮提交里的 <c>tf_addSignOperators</c> 会随实例变量
+    /// <b>跨请求复活</b>，让后续办结凭空多建一条本节点待办（根因条款见规范 04「流程变量约定」末注，
+    /// java 参考实现已在聚合根修掉，本栈同修）。本字段是加签腿的第二道防线：只认当次请求，由引擎在
+    /// <c>PrepareExecutionAsync</c> 里显式带入，处理器一律不读合并参数。</para>
+    /// <para>缺省空表＝本次没点人（正常流转档）。</para>
+    /// </summary>
+    public List<string> AddSignOperators { get; set; } = new();
 }

@@ -37,6 +37,18 @@ public static class FlowConst
     /// time 一律 <c>yyyy-MM-dd HH:mm:ss</c>）。</summary>
     public const string TransferHistory = "tf_transferHistory";
 
+    /// <summary>后加签：本次提交指定的<b>本节点</b>后继办理人（规范 04 · 后加签（可重复））。</summary>
+    public const string AddSignOperators = "tf_addSignOperators";
+    /// <summary>后加签追加式账本（落已完成任务行变量，形状照 <see cref="TransferHistory"/> 那族）。</summary>
+    public const string AddSignHistory = "tf_addSignHistory";
+    /// <summary>
+    /// 后加签轮次号键前缀（拼 <c>_{节点名}</c>）。
+    /// <para><b>不复用会签的 <see cref="LoopCounter"/></b>：后者是「退回上一步」复活血缘时被
+    /// <see cref="ProcessInstance.RejectTask"/> 的变量腿剔掉的会签簿记，而加签链的轮次要跨
+    /// "已办过的人"继续计数（A→B→A 乒乓合法），两者语义不同。</para>
+    /// </summary>
+    public const string AddSignRound = "addSignRound";
+
     public const string UserUserId = "u_userId";
     public const string UserRealName = "u_realName";
     public const string UserDeptId = "u_deptId";

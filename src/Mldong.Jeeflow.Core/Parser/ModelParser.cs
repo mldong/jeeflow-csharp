@@ -34,6 +34,10 @@ public static class ModelParser
     public const string CountersignCompletionConditionKey = "countersignCompletionCondition";
     /// <summary>退回发起人后的重提方式（NORMAL 缺省 / RETURN_TO_SOURCE；非法值解析期报错）。</summary>
     public const string ReapplyModeKey = ReapplySupport.PropReapplyMode;
+    /// <summary>后加签开关（缺省 false；非法值解析期报错，规范 02 §4.3）。</summary>
+    public const string AllowAddSignKey = AddSignSupport.PropAllowAddSign;
+    /// <summary>后加签轮次上限（0＝不限，缺省 0；非法值解析期报错，规范 02 §4.3）。</summary>
+    public const string AddSignMaxRoundsKey = AddSignSupport.PropAddSignMaxRounds;
     public const string ClassKey = "clazz";
     public const string MethodNameKey = "methodName";
     public const string ArgsKey = "args";
@@ -141,6 +145,20 @@ public static class ModelParser
             }
         }
 
+        // 后加签两条解析期硬校验（规范 02 §4.3）——配了就直接报错，不做运行时降级：
+        // 静默跑下去会让配置者以为开关生效，实际两档推进闸各裁各的。
+        // 排在引用构造之后，因为"是不是首任务节点"要沿 start 的出边看（需要 target 已接好）。
+        foreach (var task in processModel.Tasks)
+        {
+            if (!task.AllowAddSign) continue;
+            if (task.PerformType == WfPerformType.Countersign)
+                throw new JeeflowException(
+                    string.Format(AddSignSupport.MsgCountersignNode, task.Name));
+            if (FlowUtil.IsFirstTaskName(processModel, task.Name))
+                throw new JeeflowException(
+                    string.Format(AddSignSupport.MsgFirstTaskNode, task.Name));
+        }
+
         return processModel;
     }
 
@@ -244,6 +262,12 @@ public static class ModelParser
                 // 退回发起人后的重提方式：缺省 NORMAL，非法值在解析期报配置错误（不静默当缺省）
                 task.ReapplyMode = ReapplySupport.ParseMode(
                     Obj(properties, ReapplyModeKey), task.Name);
+                // 后加签两开关（规范 02 §4.3）：缺省关／0＝不限，非法值解析期报配置错误，不得静默当缺省。
+                // 声明成 TaskModel 字段后，下面"非模型字段的键镜像进 ext"那条腿不再收它们（双源就此断掉）。
+                task.AllowAddSign = AddSignSupport.ParseAllow(
+                    Obj(properties, AllowAddSignKey), task.Name);
+                task.AddSignMaxRounds = AddSignSupport.ParseMaxRounds(
+                    Obj(properties, AddSignMaxRoundsKey), task.Name);
                 // 候选人（v1.6.0 对齐 Go/Python/Node：顶层 candidateUsers/candidateGroups）
                 var candUsers = Str(properties, CandidateUsersKey);
                 var candGroups = Str(properties, CandidateGroupsKey);
@@ -295,7 +319,7 @@ public static class ModelParser
         CandidateHandlerKey, CandidateUsersKey, CandidateGroupsKey,
         CountersignTypeKey, CountersignCompletionConditionKey, ExtFieldKey,
         WidthKey, HeightKey, PreInterceptorsKey, PostInterceptorsKey,
-        ReapplyModeKey,
+        ReapplyModeKey, AllowAddSignKey, AddSignMaxRoundsKey,
     };
 
     private static string? Str(Dictionary<string, object?> d, string key) =>

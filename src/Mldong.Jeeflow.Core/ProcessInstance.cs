@@ -47,14 +47,32 @@ public class ProcessInstance
 
     // ═══ 命令方法 ═══
 
-    /// <summary>完成指定任务。</summary>
+    /// <summary>
+    /// 完成指定任务。
+    /// <para><b>实例变量只收数据类键</b>（规范 04「流程变量约定」末注 · 根因条款，java 参考实现
+    /// 同修）：办理提交的 <c>tf_*</c> 控制键（审批意见、附件、抄送人、下一节点处理人、后加签指定人等）
+    /// <b>只落该次提交的任务行变量</b>，不得并进实例变量。整包合并会让上一轮的控制键<b>跨请求复活</b>——
+    /// <c>tf_addSignOperators</c> 使后续办结凭空多建一条本节点待办，<c>tf_nextNodeOperator</c> 同病
+    /// （直返腿当年为此在引擎里显式剥键，那道保留作第二道、不改），<c>tf_approvalComment</c> 则把
+    /// 某个人的审批意见污染成全流程可读的变量。
+    /// 判据出处＝「退回修改、重提直返」§4.2「不把控制数据混入业务表单或决策表达式参数」，
+    /// 本条把它从单点绕行抬成引擎通用规则。<b>任务行留痕不受影响</b>——
+    /// <see cref="ProcessTask.Finish"/> 仍收整包参数。</para>
+    /// </summary>
     public void CompleteTask(long taskId, string? op, FlowData? args, IClock? clock = null)
     {
         var task = FindDoingTask(taskId);
         task.Finish(op, args, clock);
         if (args != null)
         {
-            foreach (var kv in args) Variables[kv.Key] = kv.Value;
+            foreach (var kv in args)
+            {
+                // 控制类参数（tf_*）一律不进实例变量——它们只属于这一次提交与这一条任务行。
+                // （键的非空不用判：本栈 FlowData＝Dictionary<string,object?>，null 键进不来，
+                //  java 那侧 HashMap 允许 null 键才需要那道防御。）
+                if (kv.Key.StartsWith(FlowConst.TaskFormDataPrefix, StringComparison.Ordinal)) continue;
+                Variables[kv.Key] = kv.Value;
+            }
             // 提取 f_ 前缀变量持久化到流程变量
             var formData = new FlowData();
             foreach (var key in args.Keys)

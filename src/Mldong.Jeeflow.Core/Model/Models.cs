@@ -179,7 +179,9 @@ public class EndModel : NodeModel
 }
 
 /// <summary>
-/// 任务节点模型（对齐 Java TaskModel）：会签 performType 走 CountersignHandler（merged 才沿边驱动）。
+/// 任务节点模型（对齐 Java TaskModel）：执行闸三档（规范 04 · 后加签「推进闸」）——
+/// 会签 performType 走 <see cref="CountersignHandler"/>、开了 <see cref="AllowAddSign"/> 的普通节点走
+/// <see cref="AddSignHandler"/>，两档都<b>只有 merged 才沿边驱动</b>；其余档无条件流出（普通档不变）。
 /// </summary>
 public class TaskModel : NodeModel
 {
@@ -206,11 +208,31 @@ public class TaskModel : NodeModel
     /// </summary>
     public WfReapplyMode ReapplyMode { get; set; } = WfReapplyMode.Normal;
 
+    /// <summary>
+    /// 后加签开关（<c>properties.allowAddSign</c>，平铺层；缺省 false ⇒ 节点不可加签，
+    /// 行为与既有普通任务<b>逐字一致</b>）。非法值在解析期报错，不得静默落回缺省
+    /// （规范 02 §4.3，纪律照 <see cref="ReapplyMode"/> 先例）。
+    /// </summary>
+    public bool AllowAddSign { get; set; }
+
+    /// <summary>
+    /// 后加签轮次上限（<c>properties.addSignMaxRounds</c>；0＝不限，缺省 0）。
+    /// 超上限<b>报错不强制放行</b>——放行等于伪造"审批完成"（规范 04 · 后加签「语义边界」）。
+    /// </summary>
+    public int AddSignMaxRounds { get; set; }
+
     internal override async Task ExecAsync(Execution execution)
     {
         if (PerformType == WfPerformType.Countersign)
         {
             await new CountersignHandler(this).HandleAsync(execution);
+            if (execution.IsMerged) await RunOutTransitionAsync(execution);
+        }
+        else if (AllowAddSign)
+        {
+            // 后加签档：推进闸交给 AddSignHandler 裁决（本次点人→同节点续建且不流转；
+            // 没点人但本节点还有兄弟待办→不流转；两者皆否→放行出边）。
+            await new AddSignHandler(this).HandleAsync(execution);
             if (execution.IsMerged) await RunOutTransitionAsync(execution);
         }
         else

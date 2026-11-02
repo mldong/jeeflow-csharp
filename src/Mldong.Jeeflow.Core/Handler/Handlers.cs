@@ -481,3 +481,73 @@ public class CountersignHandler : IHandler
         return vars;
     }
 }
+
+/// <summary>
+/// 后加签（可重复）处理器——裁决本节点的推进闸（<c>IsMerged</c>），并在点了人时同节点续建任务
+/// （对齐 Java <c>handler/impl/AddSignHandler</c>，规范 04 · 后加签）。
+///
+/// <para><b>merged 判据顺序不可反</b>：</para>
+/// <list type="number">
+///   <item>本次给了加签人 → 同节点建单，merged=false；</item>
+///   <item>没给但本节点还有未完成任务（多选时同圈的兄弟待办）→ merged=false；</item>
+///   <item>两者皆否 → merged=true，由 <see cref="TaskModel"/> 放行出边。</item>
+/// </list>
+///
+/// <para><b>停止条件即本判据本身，不另设第二判据源</b>：被加签人觉得够了、直接同意不点人，
+/// 令牌即流出本节点。多选时同一圈建多行，只有最后一个办结且没再点人才 merged=true。</para>
+///
+/// <para>形状基准＝串行会签的续建腿（<see cref="CountersignHandler.CreateNextCountersignTask"/>），
+/// 但走 <see cref="ProcessInstance.CreateTask"/> 而非裸 <see cref="ProcessTask.Create"/>：
+/// 那条腿内部已按节点 <c>expireTime</c> 表达式同尺写 <c>expire_time</c>（issues/126 写点①），
+/// 加签腿因此<b>不新增</b>建单写点——规范 04「谁写 expire_time」的计数不动。</para>
+///
+/// <para><b>报错类判据不在此</b>（互斥／开关未开／加给自己／超上限由
+/// <see cref="AddSignSupport.ValidateSubmission"/> 在改动状态之前拦下）——
+/// 进到这里的提交都已判定合法。</para>
+/// </summary>
+public class AddSignHandler : IHandler
+{
+    private readonly TaskModel _taskModel;
+
+    public AddSignHandler(TaskModel taskModel) => _taskModel = taskModel;
+
+    public Task HandleAsync(Execution execution)
+    {
+        var instance = execution.ProcessInstance!;
+        var completed = execution.ProcessTask;
+        var node = _taskModel.Name;
+        // 只认本次请求点名的办理人（Execution.AddSignOperators 由引擎从请求参数带入）。
+        // 不读 execution.Args——那是"实例变量 + 本次参数"的合并结果，上一轮提交里的
+        // tf_addSignOperators 一旦复活到实例变量就会凭空多建一条本节点待办（规范 04
+        // 「流程变量约定」末注的根因条款；本栈的显式第二道与此同源）。
+        var operators = execution.AddSignOperators;
+
+        if (operators.Count == 0)
+        {
+            // 判据①②：本节点还有兄弟待办 ⇒ 不流转；皆否 ⇒ 放行出边
+            execution.IsMerged = !AddSignSupport.HasDoingOnNode(instance, node);
+            return Task.CompletedTask;
+        }
+
+        var round = AddSignSupport.RoundOf(completed, node) + 1;
+        var firstTaskNode = FlowUtil.IsFirstTaskName(execution.ProcessModel!, node);
+        foreach (var actor in operators)
+        {
+            // 建单不变量：parent＝刚办结那条 ⇒ 加签链的血缘串成链
+            var next = instance.CreateTask(_taskModel, _taskModel.DisplayName,
+                new List<string> { actor }, execution.Operator,
+                execution.ProcessTaskId, firstTaskNode, execution.Context.ClockOrDefault);
+            AddSignSupport.PutRound(next, node, round);
+            // 分支归属与每一次普通建单同一条腿：并行范围内的加签任务必须继承父任务归属，
+            // 否则汇合判据读不到这一支（缺省按父任务血缘＋模型静态范围推导）。
+            ReapplySupport.PutScopes(next, ReapplySupport.BuildScopes(
+                completed, execution.ProcessModel, node, next.TaskId));
+            execution.AddTask(next);
+        }
+        // 账本落在刚办结那一行（只追加不覆盖），随该行变量一起落库
+        AddSignSupport.AppendHistory(completed, execution.Operator, operators, round,
+            execution.Context.ClockOrDefault);
+        execution.IsMerged = false;
+        return Task.CompletedTask;
+    }
+}

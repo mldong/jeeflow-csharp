@@ -164,6 +164,9 @@ public class JeeflowEngine
             var exec = await PrepareExecutionAsync(taskId, op, args);
             if (exec == null) return new List<ProcessTask>();
             var model = exec.ProcessModel!;
+            // 拒绝结束：本节点未完成的加签任务一并废弃，不留孤儿待办（规范 04 · 后加签「语义边界」）
+            AddSignSupport.AbandonDoingOnNode(model, exec.ProcessInstance,
+                exec.ProcessTask?.TaskName, op, _context.ClockOrDefault);
             foreach (var end in model.GetModels<EndModel>())
             {
                 var transition = new TransitionModel
@@ -214,6 +217,9 @@ public class JeeflowEngine
             var exec = await PrepareExecutionAsync(taskId, op, args);
             if (exec == null) return new List<ProcessTask>();
             var model = exec.ProcessModel!;
+            // 退回发起人：本节点未完成的加签任务一并废弃，不留孤儿待办（规范 04 · 后加签「语义边界」）
+            AddSignSupport.AbandonDoingOnNode(model, exec.ProcessInstance,
+                exec.ProcessTask?.TaskName, op, _context.ClockOrDefault);
             if (direct)
             {
                 CreateReturnToSourceApplication(exec, sourceNode!, snapshot!);
@@ -364,6 +370,10 @@ public class JeeflowEngine
         // issues/26：办理提交的 f_ 字段按任务节点字段权限过滤（只读/隐藏不入变量，C19）
         args = FlowUtil.FilterFieldByPerm(args, model, task.TaskName);
 
+        // 后加签写入口校验（规范 04 · 后加签）：必须排在 CompleteTask 之前——内存仓储无回滚，
+        // 报错时不得留下已完成的任务行（"报错且无写入"是这条链的硬要求）。
+        AddSignSupport.ValidateSubmission(model, task, args, op);
+
         // 完成任务——聚合根内部修改了 instance 中的 task 状态
         instance.CompleteTask(taskId, op, args, _context.ClockOrDefault);
 
@@ -402,6 +412,9 @@ public class JeeflowEngine
         var exec = BuildExecution(model, instance, mergedArgs, op);
         exec.ProcessTask = task;
         exec.ProcessTaskId = taskId;
+        // 加签人取"本次请求"的值显式带上，不让处理器读合并后的 args
+        // （判据与病因见 Execution.AddSignOperators 的注释——实例变量会把上一轮的 tf_ 键复活）。
+        exec.AddSignOperators = AddSignSupport.Operators(args);
         return exec;
     }
 
