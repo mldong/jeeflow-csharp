@@ -118,7 +118,14 @@ public class JeeflowEngine
         {
             // 带直返标记的申请待办只能按 submitType=5 重提：命名跳转与血缘回退（nodeName 空）
             // 两档都不得绕过（java `executeAndJumpTask` 同款守卫，覆盖整个入口而非只有命名支）。
-            ReapplySupport.RejectMarkedApplicant(await Repository.FindTaskByIdAsync(taskId), "跳转");
+            var snapshot = await Repository.FindTaskByIdAsync(taskId);
+            ReapplySupport.RejectMarkedApplicant(snapshot, "跳转");
+            if (string.IsNullOrEmpty(nodeName))
+            {
+                // issues/243 甲案：血缘守卫排在 PrepareExecutionAsync 之前——其内部 CompleteTask +
+                // UpdateTaskAsync 会把当前行办结，内存仓储无回滚，守卫后置 ⇒ 报错那次待办凭空消失。
+                await CheckRollbackPossibleAsync(snapshot);
+            }
             var exec = await PrepareExecutionAsync(taskId, op, args);
             if (exec == null) return new List<ProcessTask>();
             var model = exec.ProcessModel!;
@@ -344,6 +351,32 @@ public class JeeflowEngine
     }
 
     // ═══ 内部方法 ═══
+
+    /// <summary>
+    /// 退回上一步（<paramref name="current"/> 所在调用的 nodeName 空 ⇒ 血缘腿）的写前置守卫
+    /// （issues/243 甲案，对齐 java <c>checkRollbackPossible</c>）。
+    /// <para>只做一件事：把 <see cref="ProcessInstance.CheckRejectable"/> 的两道判据
+    /// （无血缘／canRejected 不过）提到任何状态变更之前——它自己<b>纯读</b>
+    /// （取 task→instance→define→解析模型→取血缘 parent 行），不写任务行、不写实例、不 fire 事件。</para>
+    /// <para><b>不</b>在这里报"任务不在进行中／无权办理"，也不在这里发明第二套文案——那几档留给
+    /// <see cref="PrepareExecutionAsync"/> 的既有固定错（它们也在 CompleteTask 之前，天然零写入）；
+    /// 任务取不到/不在 DOING、取不到实例或定义时一律放行，由 PrepareExecutionAsync 走它的原形状。</para>
+    /// </summary>
+    private async Task CheckRollbackPossibleAsync(ProcessTask? current)
+    {
+        if (current == null || !current.IsDoing()) return;
+        var instance = await Repository.FindInstanceByIdAsync(current.ProcessInstanceId);
+        if (instance == null) return;
+        var define = await Repository.FindDefineByIdAsync(instance.DefineId);
+        if (define == null) return;
+        var model = ModelParser.Parse(define.Content, _context);
+        // history 由仓储取（本栈与 java 的结构差：java 聚合根自带 tasks 列表，本栈引擎取行传入；
+        // 取不到传 null，判据就地报无血缘，与复活腿同一份实现）。
+        var history = current.ParentTaskId is > 0
+            ? await Repository.FindTaskByIdAsync(current.ParentTaskId)
+            : null;
+        instance.CheckRejectable(model, current, history);
+    }
 
     /// <summary>
     /// 办理前置：任务存在且 DOING、操作人有权；完成聚合任务；合并流程变量；构建 Execution。

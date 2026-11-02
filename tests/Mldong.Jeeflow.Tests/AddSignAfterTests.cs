@@ -366,10 +366,12 @@ public class AddSignAfterTests
     /// 加签链上「退回上一步」(3) <b>禁</b>（方案 §6 拍板①，照会签先例）：当前行与其血缘 parent
     /// 同节点，既有 <c>CanRejected</c> 守卫不过 ⇒ 走本栈既有等价错误出口（逐字文案＝规范 06 失败 msg 表
     /// 「canRejected 守卫不过」那一行，内部码 20010008 不进 msg；本栈异常无码位，文案即判据）。
-    /// <para>守卫拦住的是"退到同节点的上一步"：既不生成新待办，也不流到下一节点。
-    /// ⚠ 与 java 同形的一处既有排序：<b>退回族的报错发生在 prepare 之后</b>（那条待办已被本次
-    /// 办理办结），本特性"零改动"照抄这个排序、不在本轮顺手改它——「四判据必须排在任何状态变更之前」
-    /// 约束的是加签写入口（<see cref="AddSignSupport.ValidateSubmission"/>），不是这条旧腿。</para>
+    /// <para><b>报错那一次零写入</b>（issues/243 甲案，2026-11-03 与 java 同批落地）：血缘守卫
+    /// <c>ProcessInstance.CheckRejectable</c> 由引擎排在 <c>PrepareExecutionAsync</c>
+    /// （内部 <c>CompleteTask</c> + <c>UpdateTaskAsync</c> 会把当前行办结落库）<b>之前</b>，
+    /// 所以内存仓储（无回滚）里报错后当前行仍是 DOING、待办还在办理人手里。
+    /// 修前的形状是"点了退回、报错了、待办也没了"；真库外层有事务，两种位序都整笔回滚，
+    /// 观察不到差别——这一档只有内存仓储照得出来，故本格同时钉文案与零写入（对齐 java test17）。</para>
     /// </summary>
     [Fact]
     public async Task RollbackOnAddSignChainIsForbidden()
@@ -384,10 +386,17 @@ public class AddSignAfterTests
             () => engine.ExecuteAndJumpTaskAsync(b!.TaskId!.Value, "userB",
                 Submit((int)WfSubmitType.Rollback), null));
         Assert.Contains("无法驳回至上一步处理，请确认上一步骤并非fork、join、suprocess以及会签任务", ex.Message);
-        // 退同节点不成 ⇒ 本节点不再有活（B 那条已由 prepare 办结、没有复活的上一步），
-        // 且令牌绝不流到下一节点
-        Assert.Equal(0, await DoingCountAsync(repo, iid, "review"));
+        // review 上只有 a（userA 办结）与 b（报错那次<b>没被</b>办结）两行，
+        // 第三条"复活行"一条不建——守卫不过 ⇒ 不建复活行，这一档两种修法下都成立。
+        Assert.Equal(2, await RowsAsync(repo, iid, "review"));
+        Assert.Equal(1, await DoingCountAsync(repo, iid, "review"));   // 报错零写入：当前行必须仍是待办
+        // 待办还在办理人手里，且就是报错那一条 b，不是新建的行
+        var stillDoing = await DoingAsync(repo, iid, "review");
+        Assert.NotNull(stillDoing);
+        Assert.Equal(b.TaskId, stillDoing!.TaskId);
+        // 令牌绝不流到下一节点：终审节点既无待办、也无任何行
         Assert.Null(await DoingAsync(repo, iid, "final"));
+        Assert.Equal(0, await RowsAsync(repo, iid, "final"));
         Assert.Equal((int)WfInstanceState.Doing, (await repo.FindInstanceByIdAsync(iid))!.State);
     }
 

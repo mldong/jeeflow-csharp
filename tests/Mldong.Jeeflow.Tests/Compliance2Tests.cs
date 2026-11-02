@@ -266,6 +266,8 @@ public class Compliance2Tests
     {
         // issues/121 P2：引擎侧「无血缘」实为三种数据形状，都得报 20010007、都不得静默不建单——
         // P1 之前落的老行该列是 0 或 NULL，跨库迁来的还可能指不到真实行。
+        // issues/243 甲案：血缘守卫排在 prepareExecution（内含 CompleteTask + UpdateTaskAsync）之前，
+        // 报错那一次零写入——当前待办仍在办理人手里、任务行总数不变（对齐 java test167）。
         var (engine, repo) = TestInfra.NewEngine();
         var did = await TestInfra.SaveFlowDefineAsync(repo, "ln3", TestInfra.LoadFlow("02-multi-task"));
         foreach (var shape in new[] { "zero", "null", "dangling" })
@@ -281,13 +283,47 @@ public class Compliance2Tests
                 _ => long.MaxValue,
             };
             await repo.UpdateTaskAsync(row);
+            var rows = (await repo.FindHistoryTasksAsync(inst.InstanceId!.Value)).Count;
             var who = row.ActorIds.FirstOrDefault() ?? "applicant";
             var ex = await Assert.ThrowsAsync<JeeflowException>(() =>
                 engine.ExecuteAndJumpTaskAsync(row.TaskId!.Value, who, new FlowData(), null));
             Assert.Contains("上一步任务ID为空，无法驳回至上一步处理", ex.Message); Assert.DoesNotContain("2001000", ex.Message);
-            Assert.True((await repo.FindDoingTasksAsync(inst.InstanceId!.Value, null)).Count <= 1,
-                $"形状 {shape}：报错即不建单，不该凭空多出进行中任务");
+            // 报错即零写入：当前行仍 DOING（待办没丢）＋行数不变（没凭空多出/少掉任务行）
+            Assert.True((await repo.FindTaskByIdAsync(row.TaskId!.Value))!.IsDoing(),
+                $"形状 {shape}：报错零写入，当前行必须仍是 DOING");
+            Assert.Equal(rows, (await repo.FindHistoryTasksAsync(inst.InstanceId!.Value)).Count);
         }
+    }
+
+    /// <summary>
+    /// 负向：血缘守卫 canRejected——parent 是<b>旁支</b>（非祖先，fork 后的另一条并行待办）
+    /// ⇒ 20010008 逐字文案（内部码不进 msg）。issues/243 甲案：这一档同样报错零写入——
+    /// 守卫排在任何状态变更之前，报错后当前行仍 DOING、行数不变（对齐 java test168）。
+    /// </summary>
+    [Fact]
+    public async Task SubmitType3_CrossBranchLineage_AllGive20010008_ZeroWrite()
+    {
+        var (engine, repo) = TestInfra.NewEngine();
+        var did = await TestInfra.SaveFlowDefineAsync(repo, "rb-cross", TestInfra.LoadFlow("04-fork-join"));
+        var iid = await TestInfra.StartAndApplyAsync(engine, repo, did);
+        var doing = await repo.FindDoingTasksAsync(iid, null);
+        Assert.True(doing.Count >= 2, $"fork 后应至少两条并行 DOING，实得 {doing.Count}");
+        var a = doing[0];
+        var b = doing[1];
+        // 伪造血缘：把 a 的 parent 指到旁支 b（b 不是 a 的祖先）⇒ 守卫必须拦住
+        a.ParentTaskId = b.TaskId;
+        await repo.UpdateTaskAsync(a);
+        await repo.AddTaskActorAsync(a.TaskId!.Value, new List<string> { "forker" });
+        a.ActorIds.Add("forker");
+        var rows = (await repo.FindHistoryTasksAsync(iid)).Count;
+        var ex = await Assert.ThrowsAsync<JeeflowException>(() =>
+            engine.ExecuteAndJumpTaskAsync(a.TaskId!.Value, "forker",
+                new FlowData { [FlowConst.SubmitType] = (int)WfSubmitType.Rollback }, null));
+        Assert.Contains("无法驳回至上一步处理", ex.Message); Assert.DoesNotContain("2001000", ex.Message);
+        // 报错后 a 那条并行待办仍在办理人手里，且没有凭空多出的行
+        Assert.True((await repo.FindTaskByIdAsync(a.TaskId!.Value))!.IsDoing(),
+            "报错零写入：当前行必须仍是 DOING");
+        Assert.Equal(rows, (await repo.FindHistoryTasksAsync(iid)).Count);
     }
 
     [Fact]

@@ -261,14 +261,20 @@ public class ProcessInstance
     }
 
     /// <summary>
-    /// 驳回任务（退回上一步）——血缘版（规范 04 · 退回上一步）：上一步来源＝当前行的 ParentTaskId，
-    /// 复活调用方取出的那条历史行；不按模型入边拓扑推（拓扑版会回到本实例没走过的节点，且会
-    /// "静默返回 null 不建单"）。history 为 null ⇒ 无血缘文案；canRejected 守卫不过 ⇒ 守卫文案（引擎内部码 20010007、20010008 不进 msg）。
-    /// 本栈异常无码位、出口统一 99999999；对外 msg 用固定中文文案、不含引擎内部码（两格语义由文案区分）。
+    /// 退回上一步的两道守卫（规范 04 · 退回上一步）：<b>只读判据，不碰任何状态</b>。
+    /// <para>issues/243 甲案：这道守卫必须由引擎排在 <c>PrepareExecutionAsync</c>（内部
+    /// <c>CompleteTask</c> 会把当前行置为办结）<b>之前</b>——内存仓储无回滚，判据后置时
+    /// "报错"那一次调用结束后当前待办已经消失且没有复活行，用户看到的是
+    /// "点了退回、报错了、待办也没了"。与后加签写入口四判据同一规矩：
+    /// 判据一律排在任何状态变更之前，报错即零写入。</para>
+    /// <para>本栈与 java 的一处结构差：history 由引擎从仓储取出后传入（java 在聚合根内遍历
+    /// 自带 tasks），判据本身两边同构。history 为 null ⇒ 无血缘文案；canRejected 守卫不过 ⇒
+    /// 守卫文案（引擎内部码 20010007、20010008 不进 msg；本栈异常无码位，对外出口统一 99999999，
+    /// 两格语义由文案区分）。</para>
     /// </summary>
-    public ProcessTask? RejectTask(ProcessModel model, ProcessTask currentTask, ProcessTask? history, IClock? clock = null)
+    /// <returns>血缘前驱那条历史行（当前行 ParentTaskId 指向的行）</returns>
+    public ProcessTask CheckRejectable(ProcessModel model, ProcessTask currentTask, ProcessTask? history)
     {
-        const string NoLineage = "上一步任务ID为空，无法驳回至上一步处理";
         if (history == null) throw new JeeflowException(NoLineage);
         var current = model.GetNode(currentTask.TaskName);
         var parent = model.GetNode(history.TaskName);
@@ -276,6 +282,24 @@ public class ProcessInstance
         {
             throw new JeeflowException("无法驳回至上一步处理，请确认上一步骤并非fork、join、suprocess以及会签任务");
         }
+        return history;
+    }
+
+    /// <summary>无血缘（parent 为空或 0，或指不到真实行）的逐字文案（20010007 语义档）。</summary>
+    private const string NoLineage = "上一步任务ID为空，无法驳回至上一步处理";
+
+    /// <summary>
+    /// 驳回任务（退回上一步）——血缘版（规范 04 · 退回上一步）：上一步来源＝当前行的 ParentTaskId，
+    /// 复活调用方取出的那条历史行；不按模型入边拓扑推（拓扑版会回到本实例没走过的节点，且会
+    /// "静默返回 null 不建单"）。
+    /// <para>判据在 <see cref="CheckRejectable"/>（issues/243：引擎把那道守卫排在任何状态变更之前），
+    /// 本方法在守卫已过之后只负责复活；守卫复用同一份实现，不许有第二套语义。</para>
+    /// </summary>
+    public ProcessTask? RejectTask(ProcessModel model, ProcessTask currentTask, ProcessTask? history, IClock? clock = null)
+    {
+        history = CheckRejectable(model, currentTask, history);
+        // 守卫已过 ⇒ 这里 GetNode 必不为 null（CheckRejectable 里 null 就报守卫文案了）
+        var current = model.GetNode(currentTask.TaskName);
 
         // 复活行的变量只带数据类键（tf_ 与 csv_/会签簿记都是"上次提交"的残留）
         var vars = new FlowData();
