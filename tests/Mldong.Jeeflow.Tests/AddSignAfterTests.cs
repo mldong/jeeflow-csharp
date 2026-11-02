@@ -383,7 +383,7 @@ public class AddSignAfterTests
         var ex = await Assert.ThrowsAsync<JeeflowException>(
             () => engine.ExecuteAndJumpTaskAsync(b!.TaskId!.Value, "userB",
                 Submit((int)WfSubmitType.Rollback), null));
-        Assert.Contains("无法驳回至上一步处理", ex.Message);
+        Assert.Contains("无法驳回至上一步处理，请确认上一步骤并非fork、join、suprocess以及会签任务", ex.Message);
         // 退同节点不成 ⇒ 本节点不再有活（B 那条已由 prepare 办结、没有复活的上一步），
         // 且令牌绝不流到下一节点
         Assert.Equal(0, await DoingCountAsync(repo, iid, "review"));
