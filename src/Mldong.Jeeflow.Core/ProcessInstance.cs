@@ -233,10 +233,17 @@ public class ProcessInstance
         if (taskModel.CountersignType == WfCountersignType.Sequential)
         {
             var node = taskModel.Name;
+            // issues/244 ②：名册为空是**合法形状**，不是错误——跨栈已定语义（go/python/node/moon
+            // 现行行为）＝「建一行、不挂任何参与者、引擎不报错」。旧形状直接取 actorIds[0] ⇒
+            // ArgumentOutOfRangeException，而此刻调用方（引擎）已把当前任务行办结；真库整笔回滚，
+            // 内存仓储照出"实例 DOING 却零待办"的失联形状。
+            var actors = actorIds is { Count: > 0 }
+                ? new List<string> { actorIds[0] }
+                : new List<string>();
             var first = ProcessTask.Create(
                 InstanceId, node, taskModel.DisplayName,
                 taskModel.TaskType, taskModel.PerformType,
-                taskModel.Form, new List<string> { actorIds[0] }, op,
+                taskModel.Form, actors, op,
                 parentTaskId, isFirstTaskNode, clock);
             first.Variables[$"{FlowConst.CountersignOperatorList}_{node}"] = new List<object?>(actorIds);
             first.Variables[$"{FlowConst.LoopCounter}_{node}"] = 0;

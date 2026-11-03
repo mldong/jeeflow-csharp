@@ -433,6 +433,13 @@ public class JeeflowEngine
         // 报错时不得留下已完成的任务行（"报错且无写入"是这条链的硬要求）。
         AddSignSupport.ValidateSubmission(model, task, args, op);
 
+        // 节点拦截器声明校验（issues/244 ①）：当前任务所属节点的 pre/post 两串（节点级空则回落流程级）
+        // 里每个名字都必须在 NamedInterceptors 里可解析，解析不了抛执行期同一句。
+        // 同样必须排在 CompleteTask 之前：post 串本来是在 node.ExecuteAsync（办结之后）才解析的，
+        // 内存仓储无回滚 ⇒ 幽灵名报错那次「当前任务已 DONE、新任务没建」⇒ 实例 DOING 却零待办。
+        // 纯读方法（ValidateDeclaredInterceptors 只查名字、不跑拦截器，InterceptAsync 有执行期副作用）。
+        model.GetNode(task.TaskName)?.ValidateDeclaredInterceptors(model, _context.NamedInterceptors);
+
         // 完成任务——聚合根内部修改了 instance 中的 task 状态
         instance.CompleteTask(taskId, op, args, _context.ClockOrDefault);
 

@@ -85,29 +85,71 @@ public abstract class NodeModel : BaseModel
     }
 
     private Task ExecPreInterceptorsAsync(Execution execution)
-    {
-        var interceptors = PreInterceptors;
-        if (string.IsNullOrEmpty(interceptors))
-            interceptors = execution.ProcessModel?.PreInterceptors;
-        return RunInterceptorsAsync(interceptors, execution);
-    }
+        => RunInterceptorsAsync(ResolvePreInterceptors(execution.ProcessModel), execution);
 
     private Task ExecPostInterceptorsAsync(Execution execution)
+        => RunInterceptorsAsync(ResolvePostInterceptors(execution.ProcessModel), execution);
+
+    /// <summary>
+    /// 本节点实际生效的 pre 拦截器声明串：<b>节点级非空优先，空则回落流程级</b>
+    /// （对齐 Java "节点配置了拦截器 → 流程的不生效"）。
+    /// <para>执行期（<see cref="ExecPreInterceptorsAsync"/>）与办理前的纯读校验
+    /// （<see cref="ValidateDeclaredInterceptors"/>）共用这一处判据，不许有第二套取串规则。</para>
+    /// </summary>
+    public string? ResolvePreInterceptors(ProcessModel? processModel) =>
+        !string.IsNullOrEmpty(PreInterceptors) ? PreInterceptors : processModel?.PreInterceptors;
+
+    /// <summary>本节点实际生效的 post 拦截器声明串（回落判据同 <see cref="ResolvePreInterceptors"/>）。</summary>
+    public string? ResolvePostInterceptors(ProcessModel? processModel) =>
+        !string.IsNullOrEmpty(PostInterceptors) ? PostInterceptors : processModel?.PostInterceptors;
+
+    /// <summary>
+    /// <b>纯读</b>校验：本节点实际生效的 pre／post 两串里每个名字都必须在
+    /// <paramref name="namedInterceptors"/> 里可解析；解析不了抛与执行期<b>同一句</b>
+    /// <c>无法实例化拦截器: {name}</c>。
+    ///
+    /// <para><b>为什么不是「先跑一遍拦截器」</b>：<see cref="IFlowInterceptor.InterceptAsync"/> 是
+    /// 有副作用的（写 args／发事件／改聚合根），预跑一遍等于把副作用做两次；这里只查名字，
+    /// 名字切分走 <see cref="SplitInterceptorNames"/>、取串走 <see cref="ResolvePreInterceptors"/>／
+    /// <see cref="ResolvePostInterceptors"/>，与执行期逐字同判据，只是不做 <c>InterceptAsync</c>。</para>
+    ///
+    /// <para><b>为什么必须由引擎排在写之前</b>：post 串是在 <c>node.ExecuteAsync</c> 里才解析的，
+    /// 而引擎 <c>PrepareExecutionAsync</c> 早已 <c>CompleteTask</c> + <c>UpdateTaskAsync</c>。
+    /// 真库靠外层事务整笔回滚看不出差别；内存仓储无回滚 ⇒ 报错那次「当前任务已 DONE、新任务没建」
+    /// ⇒ 实例 DOING(10) 却零待办（issues/244 ①）。</para>
+    /// </summary>
+    public void ValidateDeclaredInterceptors(
+        ProcessModel? processModel, IReadOnlyDictionary<string, IFlowInterceptor> namedInterceptors)
     {
-        var interceptors = PostInterceptors;
-        if (string.IsNullOrEmpty(interceptors))
-            interceptors = execution.ProcessModel?.PostInterceptors;
-        return RunInterceptorsAsync(interceptors, execution);
+        ValidateInterceptorSpec(ResolvePreInterceptors(processModel), namedInterceptors);
+        ValidateInterceptorSpec(ResolvePostInterceptors(processModel), namedInterceptors);
+    }
+
+    private static void ValidateInterceptorSpec(
+        string? interceptors, IReadOnlyDictionary<string, IFlowInterceptor> namedInterceptors)
+    {
+        foreach (var name in SplitInterceptorNames(interceptors))
+            if (!namedInterceptors.ContainsKey(name))
+                throw new JeeflowException($"无法实例化拦截器: {name}");
+    }
+
+    /// <summary>声明串 → 名字序列（英文逗号分隔、trim、空段丢弃）；执行期与校验期共用。</summary>
+    private static IEnumerable<string> SplitInterceptorNames(string? interceptors)
+    {
+        if (string.IsNullOrEmpty(interceptors)) yield break;
+        foreach (var raw in interceptors.Split(','))
+        {
+            var name = raw.Trim();
+            if (name.Length == 0) continue;
+            yield return name;
+        }
     }
 
     /// <summary>按名解析拦截器并执行；声明名不可解析 → 显式错误（C20，不静默跳过）。</summary>
     private static async Task RunInterceptorsAsync(string? interceptors, Execution execution)
     {
-        if (string.IsNullOrEmpty(interceptors)) return;
-        foreach (var raw in interceptors.Split(','))
+        foreach (var name in SplitInterceptorNames(interceptors))
         {
-            var name = raw.Trim();
-            if (name.Length == 0) continue;
             if (!execution.Context.NamedInterceptors.TryGetValue(name, out var interceptor))
                 throw new JeeflowException($"无法实例化拦截器: {name}");
             await interceptor.InterceptAsync(execution);
