@@ -355,10 +355,20 @@ public class Compliance2Tests
         var did = await TestInfra.SaveFlowDefineAsync(repo, "st4n", TestInfra.LoadFlow("02-multi-task"));
         var iid = await TestInfra.StartAndApplyAsync(engine, repo, did);
         var leader = await TestInfra.FindDoingForAsync(repo, iid, "leader");
+        var rows = (await repo.FindHistoryTasksAsync(iid)).Count;
         var ex = await Assert.ThrowsAsync<JeeflowException>(
             () => engine.ExecuteAndJumpTaskAsync(leader.TaskId!.Value, "leader",
                 new FlowData(), "no-such-node"));
         Assert.Contains("无法找到节点模型", ex.Message);
+        // issues/243 §8-2：这一档的节点存在性判据已上提到办结之前 ⇒ 报错零写入。
+        // 修前 PrepareExecutionAsync 先 CompleteTask+UpdateTaskAsync，内存仓储无回滚，
+        // leader 会被静默办结、待办就此消失（真库靠动作级事务回滚兜住，照不出来 ⇒ 这一格只有
+        // 在内存仓储才有意义）。
+        var still = await repo.FindTaskByIdAsync(leader.TaskId!.Value);
+        Assert.NotNull(still);
+        Assert.True(still!.IsDoing(), "报错零写入：原任务必须还是那条待办（同 id、仍 DOING）");
+        Assert.Equal((int)WfInstanceState.Doing, (await repo.FindInstanceByIdAsync(iid))!.State);
+        Assert.Equal(rows, (await repo.FindHistoryTasksAsync(iid)).Count);
     }
 
     [Fact]

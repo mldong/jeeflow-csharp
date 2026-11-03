@@ -126,6 +126,11 @@ public class JeeflowEngine
                 // UpdateTaskAsync 会把当前行办结，内存仓储无回滚，守卫后置 ⇒ 报错那次待办凭空消失。
                 await CheckRollbackPossibleAsync(snapshot);
             }
+            else
+            {
+                // issues/243 §8-2：命名跳转的「找不到节点模型」同一族缺口，同规矩前置（对齐 java 35f0aca）。
+                await CheckJumpTargetExistsAsync(snapshot, nodeName);
+            }
             var exec = await PrepareExecutionAsync(taskId, op, args);
             if (exec == null) return new List<ProcessTask>();
             var model = exec.ProcessModel!;
@@ -376,6 +381,27 @@ public class JeeflowEngine
             ? await Repository.FindTaskByIdAsync(current.ParentTaskId)
             : null;
         instance.CheckRejectable(model, current, history);
+    }
+
+    /// <summary>
+    /// 命名跳转（<paramref name="nodeName"/> 非空那一支）的节点存在性前置守卫
+    /// （issues/243 §8-2，对齐 java <c>checkJumpTargetExists</c>）。
+    /// <para>从前「根据节点名称[X]无法找到节点模型」排在 <see cref="PrepareExecutionAsync"/> 之后
+    /// （其内部 CompleteTask + UpdateTaskAsync 已把当前行办结），内存仓储无回滚 ⇒ 节点名写错一次
+    /// 就把办理人的待办弄丢。真库有动作级事务整笔回滚观察不到差别，这一档只有内存仓储照得出来。</para>
+    /// <para>只做一件事：<b>纯读</b>取 task→instance→define→解析模型，节点名查不到即抛原来那一句——
+    /// 不新增文案、不新增错误码；任务取不到/不在 DOING、取不到实例或定义时一律放行，
+    /// 由 <see cref="PrepareExecutionAsync"/> 报它的既有固定错（那几档本就在办结之前）。</para>
+    /// </summary>
+    private async Task CheckJumpTargetExistsAsync(ProcessTask? current, string? nodeName)
+    {
+        if (current == null || !current.IsDoing()) return;
+        var instance = await Repository.FindInstanceByIdAsync(current.ProcessInstanceId);
+        if (instance == null) return;
+        var define = await Repository.FindDefineByIdAsync(instance.DefineId);
+        if (define == null) return;
+        if (ModelParser.Parse(define.Content, _context).GetNode(nodeName) == null)
+            throw new JeeflowException($"根据节点名称[{nodeName}]无法找到节点模型");
     }
 
     /// <summary>
