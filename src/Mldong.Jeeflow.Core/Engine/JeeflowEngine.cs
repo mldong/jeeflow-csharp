@@ -316,11 +316,19 @@ public class JeeflowEngine
                 FlowUtil.IsFirstTaskName(model, target.TaskName), _context.ClockOrDefault);
             foreach (var t in doingDescendants)
                 await Repository.UpdateTaskAsync(t);
-            // 复活行走普通 saveTask（分配 taskId＋全量写参与者行）后补 fire 码 3。
-            // ⚠ 这里<b>不</b>过 saveNewTask 那条腿（委托自动生效／_branchCtx.root 回填）——逐字照
-            // java recallTask 的 `repository.saveTask(resurrected)`：复活行的参与者就是原行名册，
-            // 再并一次代理人等于把"你自己重办"改成"别人替你办"，与规范 04「参与者＝原行名册」相抵。
+            // 复活行走**建单收口**（owner 2026-11-04 定档，与 java 1.8.59／php 同批）：撤回后重新出现的
+            // 这一手本质是一次建单，不是历史行的状态翻转 ⇒ 名册与普通建单同尺＝
+            // 原行名册 ＋ 当时生效委托并入（不摘原人）。
+            // 本栈旧注释写的理由——"再并一次代理人等于把'你自己重办'改成'别人替你办'"——被定档推翻：
+            // 并入**不摘原人**，原办理人仍在名册里、照样能办，只是同时让受托人也看得见这一手，
+            // 与任何一次普通建单的可见性一致；记录类留痕行才是不许并代理人的那一档（见 PersistTasksAsync）。
+            await ApplySurrogateAsync(BuildExecution(model, instance, new FlowData(), op), resurrected);
             await Repository.SaveTaskAsync(resurrected);
+            // 与 PersistTasksAsync 同一套两拍（java saveNewTask 同构）：分支根任务建单时自身 taskId
+            // 尚未生成 ⇒ _branchCtx.root 先落 0，落库后回填并补一次 UPDATE。撤回的复活行 parent 照原行，
+            // 落在 fork 分支里时这一拍不能省，否则汇合判据把它当成另一档。
+            if (ReapplySupport.FillRootSelf(resurrected))
+                await Repository.UpdateTaskAsync(resurrected);
             await NotifyTaskStartAsync(resurrected);
             // 写 3：原 FINISHED 行不改写，只盖 tf_recallHistory 追加账本（recalledTaskId 指向复活行）
             RecallSupport.AppendRecallHistory(target, op, resurrected.TaskId, _context.ClockOrDefault);

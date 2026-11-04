@@ -481,6 +481,60 @@ public class Recall246Tests
         Assert.Equal(0, probe.Names.Count(n => n == "ProcessTaskStart"));
     }
 
+    /// <summary>
+    /// 定档用例（owner 2026-11-04，规范 04 · 已办撤回第 3 条）：复活行**走建单收口** ⇒
+    /// 名册＝原行名册 ＋ 当时生效委托并入（不摘原人），与普通建单同尺。
+    ///
+    /// <para>本栈首版逐字照 java 直调 <c>SaveTaskAsync</c>  ⇒ 不并，与 go／python／node／rust／moon
+    /// 五栈相反（5-3 分裂）；旧注释的理由"再并一次代理人等于把'你自己重办'改成'别人替你办'"被定档推翻——
+    /// 并入<b>不摘原人</b>，原办理人仍在名册里、照样能办，只是同时让受托人也看得见这一手。</para>
+    ///
+    /// <para><b>台账必须在 review 建单之后才登记</b>：不设这条前置自证，"复活行含 userB"可能被
+    /// "建单时就已并入、原行本来就有 userB"顶包，这一格就照不到撤回这条腿（java 侧同口径用例
+    /// 第一版正是这么红的：expected [userA] but was [userA, userB]）。</para>
+    /// </summary>
+    [Fact]
+    public async Task R246_ResurrectedRowMergesEffectiveSurrogate()
+    {
+        var repo = new MemoryRepository();
+        var ext = new MemoryExtRepository(repo, null);
+        var ctx = new ServiceContext(repo, ext);
+        ctx.Clock = new FixedClock(new DateTime(2026, 8, 1, 9, 0, 0));
+        ctx.IdGenerator = new AtomicIdGenerator(1, ctx.Clock);
+        ctx.UserProvider = new TestUserProvider();
+        TestInfra.RegisterBuiltins(ctx);
+        repo.Configure(ctx);
+        ext.Configure(ctx);
+        var engine = new JeeflowEngine(ctx);
+
+        var flowJson = Chain("\"allowRecall\":true", NextName("rc246sur"));
+        var defineId = await TestInfra.SaveFlowDefineAsync(repo, FlowName(flowJson), flowJson);
+        var inst = await engine.StartProcessInstanceByIdAsync(defineId, "applicant", new FlowData());
+        foreach (var t in await repo.FindDoingTasksAsync(inst.InstanceId!.Value, null))
+            await engine.ExecuteProcessTaskAsync(t.TaskId!.Value, "applicant", Submit(Apply));
+        var review = await DoingAsync(repo, inst.InstanceId!.Value, "review");
+        await engine.ExecuteProcessTaskAsync(review!.TaskId!.Value, "userA", Submit(Agree));
+
+        var oldRow = await FinishedRowAsync(repo, inst.InstanceId!.Value, "review");
+        var rosterBefore = oldRow!.ActorIds.ToList();
+        Assert.Equal(new[] { "userA" }, rosterBefore);   // 前置：台账还没登记，原行只有办理人本人
+
+        await ext.SaveSurrogateAsync(new ProcessSurrogate
+        {
+            ProcessName = "",          // 空＝全流程兜底台账
+            Operator = "userA",
+            Surrogate = "userB",
+            Enabled = 1,
+            CreateUser = "tester",
+        });
+
+        var revived = await engine.RecallTaskAsync(oldRow.TaskId!.Value, "userA");
+        Assert.Contains("userB", revived.ActorIds);      // 复活行须并上当时生效的受托人
+        Assert.Contains("userA", revived.ActorIds);      // 并入不摘原人
+        Assert.Equal(2, (await repo.FindTaskActorsAsync(revived.TaskId!.Value)).Count);  // 真落参与者表
+        Assert.Equal(rosterBefore, oldRow.ActorIds);     // 原 FINISHED 行的名册一字不动
+    }
+
     /// <summary>只记事件名与事件体的探针（本格判据是"发没发、发几次、载荷对不对"，不需要反查仓储）。
     /// <see cref="Clear"/> 用来把"发起＋办理"那几拍已经产生的事件清空，只裁撤回这一次调用。</summary>
     private sealed class RecallProbe : IProcessEventListener
