@@ -42,18 +42,23 @@ public static class AddSignSupport
     // ═══ 解析期配置校验（规范 02 §4.3 · 纪律照 reapplyMode 先例：非法值不得静默当缺省）═══
 
     /// <summary>
-    /// 解析 <see cref="PropAllowAddSign"/>：缺省 false；非布尔档报配置错误，不得静默落回缺省
+    /// 解析布尔开关：缺省 false；非布尔档报配置错误，不得静默落回缺省
     /// （配错要在解析期就能诊断出来，静默降级＝配置者以为开关生效）。
+    /// <para><c>keyName</c> 决定报错文案里报哪一枚键名（java <c>parseAllow(value, nodeName, keyName)</c>
+    /// 同尺）：<c>allowAddSign</c>／<see cref="RecallSupport.PropAllowRecall"/>／
+    /// <see cref="CollectSupport.PropDynamicCountersign"/> 三枚共用这一把解析尺子，
+    /// 缺省仍按后加签那枚，既有调用点与既有一格文案逐字不变。</para>
     /// </summary>
-    public static bool ParseAllow(object? value, string? nodeName)
+    public static bool ParseAllow(object? value, string? nodeName, string? keyName = null)
     {
+        var key = keyName ?? PropAllowAddSign;
         if (value == null) return false;
         if (value is bool b) return b;
         var v = AsText(value);
         if (v.Length == 0) return false;
         if ("true".Equals(v, StringComparison.OrdinalIgnoreCase)) return true;
         if ("false".Equals(v, StringComparison.OrdinalIgnoreCase)) return false;
-        throw new JeeflowException($"节点[{nodeName}]的 {PropAllowAddSign} 配置非法: {v}");
+        throw new JeeflowException($"节点[{nodeName}]的 {key} 配置非法: {v}");
     }
 
     /// <summary>
@@ -171,15 +176,17 @@ public static class AddSignSupport
 
     /// <summary>
     /// 废弃本节点未完成的加签任务（拒绝／退回发起人时调用，不留孤儿待办——规范 04 · 后加签「语义边界」）。
-    /// 只对开了 <see cref="PropAllowAddSign"/> 的节点动手：会签节点的兄弟任务由既有会签腿管
-    /// （<see cref="CountersignHandler"/>），不在此扩面。
+    /// 只对开了 <see cref="PropAllowAddSign"/> <b>或</b> <see cref="CollectSupport.PropDynamicCountersign"/>
+    /// 的节点动手（issues/247：征询成员行同属本节点 DOING，实例撤回/退回路径一并清场）。
+    /// 普通节点的兄弟任务仍由既有会签腿管（<see cref="CountersignHandler"/>），不在此扩面。
     /// </summary>
     /// <returns>实际废弃的行数</returns>
     public static int AbandonDoingOnNode(ProcessModel? model, ProcessInstance? instance,
                                          string? nodeName, string? operatorId, IClock? clock = null)
     {
         if (model == null || instance?.Tasks == null || nodeName == null) return 0;
-        if (model.GetNode(nodeName) is not TaskModel node || !node.AllowAddSign) return 0;
+        if (model.GetNode(nodeName) is not TaskModel node
+            || (!node.AllowAddSign && !node.DynamicCountersign)) return 0;
         var abandoned = 0;
         foreach (var t in instance.Tasks)
         {

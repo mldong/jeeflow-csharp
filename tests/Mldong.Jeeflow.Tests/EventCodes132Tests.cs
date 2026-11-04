@@ -11,7 +11,7 @@ namespace Mldong.Jeeflow.Tests;
 /// <list type="number">
 /// <item><b>码表</b>（§11.3 A 套整型）：1..4 不变（4＝CC_CREATE，§11.6 号位让位史），
 /// 新增 5 TASK_COMPLETE／6 TASK_REJECT／7 TASK_TRANSFER／8 TASK_WITHDRAW／9 INSTANCE_TERMINATED，
-/// 10+ 只占号不发（§11.4 第 1 条）；</item>
+/// 10 TASK_RECALL 由 issues/246（2026-11-03 立法）启用，11+ 只占号不发（§11.4 第 1 条）；</item>
 /// <item><b>顺序</b>（§11.8 镜像格 L2-30）：一条流从发起到办结<b>按顺序</b>断
 /// <c>[1,3,5,2]</c>＋抄送支 <c>[4]</c>——只断"出现过"不算过；</item>
 /// <item><b>落库之后才 fire</b>（§11.2 原则 3）：监听器在回调里反查仓储，读到的必须已是新状态；</item>
@@ -26,7 +26,7 @@ namespace Mldong.Jeeflow.Tests;
 ///
 /// <para>9 INSTANCE_TERMINATED 在本栈<b>无 fire 点</b>：门面 40+ action 没有"终止实例"这一支
 /// （issues/134 门面级注释亦记"门面没有终止实例的 action"），聚合根 <c>Interrupt</c> 生产路径零调用者
-/// ⇒ 只占号。此结论与 java 栈一致，见 <see cref="CodeTable_MatchesSpecASet_Codes1To9"/>。</para>
+/// ⇒ 只占号。此结论与 java 栈一致，见 <see cref="CodeTable_MatchesSpecASet_Codes1To10"/>。</para>
 /// </summary>
 public class EventCodes132Tests
 {
@@ -61,10 +61,11 @@ public class EventCodes132Tests
     // ═══ ① 码表（spec §11.3 A 套）═══
 
     [Fact]
-    public void CodeTable_MatchesSpecASet_Codes1To9()
+    public void CodeTable_MatchesSpecASet_Codes1To10()
     {
         // 规范名是权威，码值是本栈附带数值：A 套 1..4 不动（java 血缘，4 号位让位史见 §11.6），
-        // 5..9 为 132 新增，10+ 本轮不发只占号（§11.4 第 1 条）。
+        // 5..9 为 132 新增，10 TASK_RECALL 由 issues/246（2026-11-03 立法、本轮六腿对齐）启用，
+        // 11+ 仍是不发只占号（§11.4 第 1 条）。
         Assert.Equal(1, (int)ProcessEventType.ProcessInstanceStart);   // PROCESS_INSTANCE_START
         Assert.Equal(2, (int)ProcessEventType.ProcessInstanceEnd);     // PROCESS_INSTANCE_END
         Assert.Equal(3, (int)ProcessEventType.ProcessTaskStart);       // PROCESS_TASK_START
@@ -74,10 +75,15 @@ public class EventCodes132Tests
         Assert.Equal(7, (int)ProcessEventType.TaskTransfer);           // TASK_TRANSFER
         Assert.Equal(8, (int)ProcessEventType.TaskWithdraw);           // TASK_WITHDRAW
         Assert.Equal(9, (int)ProcessEventType.InstanceTerminated);     // INSTANCE_TERMINATED
+        // ⚠ 表尾追加的那一行＝本文件唯一被改动的期望值，性质是"spec 11 §11.3 码表多了 10 号位"：
+        //   1..9 六枚的名、值、顺序**一字未动**，只在这条腿的末尾补一枚 10，并让下面的号段判据
+        //   从"≤9"抬到"≤10"（11+ 仍是私自发号＝分叉）。触发源＝引擎 JeeflowEngine.RecallTaskAsync，
+        //   见 Recall246Tests 的码 10 两格（只发一次／报错那次一个都不发）。
+        Assert.Equal(10, (int)ProcessEventType.TaskRecall);            // TASK_RECALL（issues/246）
 
-        // 不重排、不复用：1..9 恰各一次，且没有任何栈内码越到 10+（预留段不得被本轮占用）
+        // 不重排、不复用：1..10 恰各一次，且没有任何栈内码越到 11+（预留段不得被本轮占用）
         var codes = Enum.GetValues<ProcessEventType>().Select(e => (int)e).OrderBy(c => c).ToList();
-        Assert.Equal(new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 }, codes);
+        Assert.Equal(new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 }, codes);
     }
 
     // ═══ ② 顺序（镜像格 L2-30：只断"出现过"不算过）═══
@@ -126,7 +132,9 @@ public class EventCodes132Tests
         foreach (var ev in probe.Events.Where(e => e.EventType == ProcessEventType.TaskComplete))
             Assert.Equal(ev.SourceId!.Value, Convert.ToInt64(ev.Data["taskId"]!));
 
-        // 10+ 预留段没被任何事件用上
+        // 这条流（发起→办 apply→办 leader→办结）压根不涉撤回，故 10 TASK_RECALL 也不该出现：
+        // 上限钉在 9 而不是 10——10 号位已由 issues/246 启用为可发码，这里仍按"这条流没走过撤回"
+        // 收紧一档，是**本格的现场判据**，不是"10+ 属预留段"那条旧理由（那条已被 246 改写）。
         Assert.All(probe.Events, ev => Assert.True((int)ev.EventType <= 9));
 
         // 探针（在监听器回调里反查仓储）零失败＝本文件覆盖到的每一支都是"落库之后才 fire"

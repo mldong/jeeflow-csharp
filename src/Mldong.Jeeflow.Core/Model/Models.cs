@@ -263,6 +263,23 @@ public class TaskModel : NodeModel
     /// </summary>
     public int AddSignMaxRounds { get; set; }
 
+    /// <summary>
+    /// 已办撤回开关（<c>properties.allowRecall</c>，平铺层；缺省 false ⇒ 该节点办结后不可撤回）。
+    /// 非法值在解析期报错，不得静默落回缺省（规范 02 §4.4，纪律照 <see cref="AllowAddSign"/> 先例）。
+    /// 会签节点／申请节点配它＝解析期禁配（<see cref="ModelParser"/>）——前者撤"谁的一票"语义不清，
+    /// 后者走实例撤回＋重新发起那条既有通道。
+    /// </summary>
+    public bool AllowRecall { get; set; }
+
+    /// <summary>
+    /// 动态会签（征询模式）开关（<c>properties.dynamicCountersign</c>，平铺层；缺省 false）。
+    /// 办理人运行期拉人收意见：主办提交带 <c>tf_addSignOperators</c> 时<b>不办结主办行</b>、
+    /// 按人建成员行，收齐后闸门才放开（规范 04 · 动态会签）。
+    /// 与 <see cref="AllowAddSign"/> 互斥、会签节点／申请节点禁配（都在解析期报错，规范 02 §4.4）；
+    /// 两档共用协议键 <c>tf_addSignOperators</c>，行为靠节点属性分流。
+    /// </summary>
+    public bool DynamicCountersign { get; set; }
+
     internal override async Task ExecAsync(Execution execution)
     {
         if (PerformType == WfPerformType.Countersign)
@@ -274,6 +291,14 @@ public class TaskModel : NodeModel
         {
             // 后加签档：推进闸交给 AddSignHandler 裁决（本次点人→同节点续建且不流转；
             // 没点人但本节点还有兄弟待办→不流转；两者皆否→放行出边）。
+            await new AddSignHandler(this).HandleAsync(execution);
+            if (execution.IsMerged) await RunOutTransitionAsync(execution);
+        }
+        else if (DynamicCountersign)
+        {
+            // 征询档（issues/247）：发起腿在门面（带 tf_addSignOperators 的提交不办结主办行，
+            // 到不了这里）；能走进执行闸的只有成员行办结与主办行收齐后的拍板——两者复用
+            // AddSignHandler 推进闸：主办还 DOING ⇒ merged=false 节点不动；主办办结且成员清零 ⇒ 放行。
             await new AddSignHandler(this).HandleAsync(execution);
             if (execution.IsMerged) await RunOutTransitionAsync(execution);
         }

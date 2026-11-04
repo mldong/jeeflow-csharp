@@ -42,6 +42,16 @@ public static class FlowConst
     /// <summary>后加签追加式账本（落已完成任务行变量，形状照 <see cref="TransferHistory"/> 那族）。</summary>
     public const string AddSignHistory = "tf_addSignHistory";
     /// <summary>
+    /// 已办撤回账本（issues/246）：<c>{operator, time, recalledTaskId}</c> 只追加，
+    /// 落<b>被撤回的旧行</b>变量（原 FINISHED 行一律不改写，账本是它唯一的追加痕迹）。
+    /// </summary>
+    public const string RecallHistory = "tf_recallHistory";
+    /// <summary>
+    /// 动态会签（issues/247）发起原因：选填，随账本条目落库并<b>盖到每条成员行</b>
+    /// （单行出证自足，不回查主办行）。
+    /// </summary>
+    public const string AddSignReason = "tf_addSignReason";
+    /// <summary>
     /// 后加签轮次号键前缀（拼 <c>_{节点名}</c>）。
     /// <para><b>不复用会签的 <see cref="LoopCounter"/></b>：后者是「退回上一步」复活血缘时被
     /// <see cref="ProcessInstance.RejectTask"/> 的变量腿剔掉的会签簿记，而加签链的轮次要跨
@@ -185,8 +195,17 @@ public enum ProcessEventType
     /// <c>ProcessInstance.Interrupt</c> 只有测试调用。补 action 时必须在 UpdateInstanceAsync
     /// <b>落库之后</b> fire 本码，不得先 fire 后落库。</summary>
     InstanceTerminated = 9,
-    // 10+ 预留（超时催办／超时自动通过 …）：**本轮不发，仅占号防分叉**（spec §11.3 + §11.4 第 1 条：
+    /// <summary>10 <c>TASK_RECALL</c> 已办任务撤回发生（issues/246，spec §11.3 码 10）。
+    /// <para>触发时机：撤回动作落库之后 fire <b>一次</b>——原 FINISHED 行保留＋<c>tf_recallHistory</c>
+    /// 追加＋同节点新 DOING 行建单；<b>复活行自己的待办另走码 3</b>。<c>sourceId</c>＝被撤回的旧行 taskId；
+    /// 直传载荷 instanceId / taskId / operator。<b>只发 10，不补发 5/6</b>——撤回不是办结也不是拒绝
+    /// （同码 8 不补发 2 的理由）。动态会签（issues/247）<b>不新增事件码</b>：成员行建/结走既有 3/5，
+    /// 撤回未答成员靠 <c>tf_addSignHistory</c> 账本留痕、不发码。</para></summary>
+    TaskRecall = 10,
+    // 11+ 预留（超时催办／超时自动通过 …）：**本轮不发，仅占号防分叉**（spec §11.3 + §11.4 第 1 条：
     // 八栈都没有时钟扫描器，发了没有触发源）。号一旦发出去不许改语义、不许复用（§11.2 原则 2）。
+    // ⚠ 10 号位原本也在这一句的"预留段"里，由 issues/246（2026-11-03 立法）启用，触发源＝引擎
+    // <c>JeeflowEngine.RecallTaskAsync</c> 的落库收口；11+ 仍是预留。
 }
 
 /// <summary>任务类型 codeOf（C4：code/'CODE'/中文 message 容错，兜底 Major）。</summary>

@@ -58,7 +58,7 @@ public class FacadeTests : IDisposable
         return inst.InstanceId.Value;
     }
 
-    /// <summary>全 action dispatch 覆盖（manifest 47 条）：任意载荷不落 default（否则 msg 含"未知 action"）。</summary>
+    /// <summary>全 action dispatch 覆盖（manifest 49 条）：任意载荷不落 default（否则 msg 含"未知 action"）。</summary>
     [Fact]
     public async Task AllActionsInManifest_Dispatch_NoUnknown()
     {
@@ -83,8 +83,12 @@ public class FacadeTests : IDisposable
         // issues/115：processTask/transfer 补录后清单 45→46；批二 §3-8 补第 47 个 action
         // processTask/removeTaskActor 后 46→47（owner 2026-10-01 拍 A：条数断言随代次前进，
         // 本断言即 manifest ↔ 分派表一致性门禁：清单漏记 → 该 action 不被 dispatch 覆盖；
-        // 分派表漏记 → 落 unknown 分支直接红）
-        Assert.Equal(47, count);
+        // 分派表漏记 → 落 unknown 分支直接红）。
+        // 六腿对齐轮（issues/246＋247，2026-11-04）：规范 06 §3 流程任务组已列入
+        // processTask/recall 与 processTask/revokeDynamicCountersign 两枚 ⇒ 47→49。
+        // ⚠ 这条改动的性质＝"代次前进时门禁本来的动作"，不是为了让测试变绿而放宽期望：
+        //   两条新 action 若只进分派表不进清单，本格照样绿但清单与规范脱节，所以补录必同步抬数。
+        Assert.Equal(49, count);
     }
 
     private static string FindManifestPath()

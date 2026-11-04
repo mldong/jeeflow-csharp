@@ -38,6 +38,10 @@ public static class ModelParser
     public const string AllowAddSignKey = AddSignSupport.PropAllowAddSign;
     /// <summary>后加签轮次上限（0＝不限，缺省 0；非法值解析期报错，规范 02 §4.3）。</summary>
     public const string AddSignMaxRoundsKey = AddSignSupport.PropAddSignMaxRounds;
+    /// <summary>已办撤回开关（缺省 false；非法值解析期报错，规范 02 §4.4 · issues/246）。</summary>
+    public const string AllowRecallKey = RecallSupport.PropAllowRecall;
+    /// <summary>动态会签（征询模式）开关（缺省 false；非法值解析期报错，规范 02 §4.4 · issues/247）。</summary>
+    public const string DynamicCountersignKey = CollectSupport.PropDynamicCountersign;
     public const string ClassKey = "clazz";
     public const string MethodNameKey = "methodName";
     public const string ArgsKey = "args";
@@ -159,6 +163,35 @@ public static class ModelParser
                     string.Format(AddSignSupport.MsgFirstTaskNode, task.Name));
         }
 
+        // 已办撤回两条解析期硬校验（规范 02 §4.4，issues/246）：会签节点撤"谁的一票"语义不清；
+        // 申请节点走实例撤回＋重新发起（既有通道），不需要同实例复活。位序照 java：后加签 → 已办撤回。
+        foreach (var task in processModel.Tasks)
+        {
+            if (!task.AllowRecall) continue;
+            if (task.PerformType == WfPerformType.Countersign)
+                throw new JeeflowException(
+                    string.Format(RecallSupport.MsgCountersignNode, task.Name));
+            if (FlowUtil.IsFirstTaskName(processModel, task.Name))
+                throw new JeeflowException(
+                    string.Format(RecallSupport.MsgFirstTaskNode, task.Name));
+        }
+
+        // 动态会签三条解析期硬校验（规范 02 §4.4，issues/247）：与 allowAddSign 双开＝共用参数
+        // tf_addSignOperators 的行为歧义；会签节点推进语义与征询挂起语义打架；申请节点不需要征询。
+        foreach (var task in processModel.Tasks)
+        {
+            if (!task.DynamicCountersign) continue;
+            if (task.AllowAddSign)
+                throw new JeeflowException(
+                    string.Format(CollectSupport.MsgMutexAddSign, task.Name));
+            if (task.PerformType == WfPerformType.Countersign)
+                throw new JeeflowException(
+                    string.Format(CollectSupport.MsgCountersignNode, task.Name));
+            if (FlowUtil.IsFirstTaskName(processModel, task.Name))
+                throw new JeeflowException(
+                    string.Format(CollectSupport.MsgApplyNode, task.Name));
+        }
+
         return processModel;
     }
 
@@ -265,7 +298,13 @@ public static class ModelParser
                 // 后加签两开关（规范 02 §4.3）：缺省关／0＝不限，非法值解析期报配置错误，不得静默当缺省。
                 // 声明成 TaskModel 字段后，下面"非模型字段的键镜像进 ext"那条腿不再收它们（双源就此断掉）。
                 task.AllowAddSign = AddSignSupport.ParseAllow(
-                    Obj(properties, AllowAddSignKey), task.Name);
+                    Obj(properties, AllowAddSignKey), task.Name, AllowAddSignKey);
+                // 已办撤回开关（规范 02 §4.4，issues/246）：同尺解析，非法值解析期报配置错误
+                task.AllowRecall = AddSignSupport.ParseAllow(
+                    Obj(properties, AllowRecallKey), task.Name, AllowRecallKey);
+                // 动态会签（征询模式）开关（规范 02 §4.4，issues/247）：同尺解析
+                task.DynamicCountersign = AddSignSupport.ParseAllow(
+                    Obj(properties, DynamicCountersignKey), task.Name, DynamicCountersignKey);
                 task.AddSignMaxRounds = AddSignSupport.ParseMaxRounds(
                     Obj(properties, AddSignMaxRoundsKey), task.Name);
                 // 候选人（v1.6.0 对齐 Go/Python/Node：顶层 candidateUsers/candidateGroups）
@@ -320,6 +359,7 @@ public static class ModelParser
         CountersignTypeKey, CountersignCompletionConditionKey, ExtFieldKey,
         WidthKey, HeightKey, PreInterceptorsKey, PostInterceptorsKey,
         ReapplyModeKey, AllowAddSignKey, AddSignMaxRoundsKey,
+        AllowRecallKey, DynamicCountersignKey,
     };
 
     private static string? Str(Dictionary<string, object?> d, string key) =>

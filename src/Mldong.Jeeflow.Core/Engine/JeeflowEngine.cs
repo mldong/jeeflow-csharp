@@ -255,6 +255,157 @@ public class JeeflowEngine
         });
     }
 
+    // ═══ 已办撤回（issues/246）═══
+
+    /// <summary>
+    /// 已办撤回（规范 04 · 已办撤回／规范 06 §<c>processTask/recall</c>）：办理人撤回<b>自己刚办结的
+    /// 那一手</b>，同实例内复活重办。对齐 Java <c>JeeflowEngineImpl.recallTask</c>（HEAD 14674d7）。
+    ///
+    /// <para><b>判据全部排在任何状态变更之前</b>（报错即零写入，与后加签写入口／退回守卫同一规矩），
+    /// 位序逐字照 java：行存在且已办结 → 参与者/特权 → 实例存在 → 实例 DOING → 节点开关 → 窗口
+    /// （下游无任何 FINISHED）。内存仓储没有事务回滚，判据后置就会留下"下游已废弃但没复活行"的
+    /// 半撤状态，那是不可恢复的。</para>
+    ///
+    /// <para><b>参与人判断不走只认 DOING 的 <see cref="ProcessTask.IsAllowed"/></b>（承重判据 3）：
+    /// 目标行是 FINISHED，必须按名册 <see cref="ProcessTask.ActorIds"/> 判断——内存仓随行携带、
+    /// SQL 仓 <c>FindTaskByIdAsync</c> 从参与者表水合，两仓同源；<c>flow.auto</c>/<c>flow.admin</c>
+    /// 特权放行（与转办/实例撤回同口径）。</para>
+    ///
+    /// <para>落库序照 java：废弃行 updateTask → 复活行 saveTask（分配 taskId、全量写参与者行）
+    /// → 复活行 fire 码 3 → 原行盖 <c>tf_recallHistory</c> 后 updateTask → updateInstance
+    /// → fire 码 10 <c>TASK_RECALL</c>（sourceId＝被撤回的旧行；只发 10 不补发 5/6）。</para>
+    /// </summary>
+    /// <returns>复活的新任务行（DOING，唯一活待办）</returns>
+    public Task<ProcessTask> RecallTaskAsync(long taskId, string? op) =>
+        RunInGateAsync(() => RunInInstanceLockAsync(taskId,
+            () => RecallTaskInTxAsync(taskId, op)));
+
+    private async Task<ProcessTask> RecallTaskInTxAsync(long taskId, string? op)
+    {
+        return await RunInTxAsync(async () =>
+        {
+            // 判据 1：目标行存在且已办结（不存在／进行中／已废弃同档）
+            var target = await Repository.FindTaskByIdAsync(taskId);
+            if (target == null || !target.IsFinished())
+                throw new JeeflowException(RecallSupport.MsgNotFinished);
+            // 判据 2：参与者/特权（按名册，不走只认 DOING 的 IsAllowed）
+            if (!JeeflowEngine.IsPrivileged(op) && !target.ActorIds.Contains(op!))
+                throw new JeeflowException(RecallSupport.MsgNoPermission);
+            // 判据 3/4：实例存在且 DOING（"流程实例不存在"逐字照 java JeeflowEngineImpl:494，
+            // 与门面 processInstance/withdraw 那族同文案，不另造第二种）
+            var instance = await Repository.FindInstanceByIdAsync(target.ProcessInstanceId);
+            if (instance == null)
+                throw new JeeflowException("流程实例不存在");
+            if (instance.State != (int)WfInstanceState.Doing)
+                throw new JeeflowException(RecallSupport.MsgInstanceNotDoing);
+            // 判据 5：节点开关（解析期禁配已由 ModelParser 兜住，这里再判开关本身；
+            // 非任务节点／节点查不到同样落"未开启 allowRecall"那一档，与 java 的
+            // `!(node instanceof TaskModel) || !isAllowRecall()` 同一判）
+            var define = await Repository.FindDefineByIdAsync(instance.DefineId);
+            if (define == null) throw new JeeflowException(WfErr.NotFoundProcessDefine);
+            var model = ModelParser.Parse(define.Content, _context);
+            if (model.GetNode(target.TaskName) is not TaskModel node || !node.AllowRecall)
+                throw new JeeflowException(string.Format(RecallSupport.MsgSwitchOff, target.TaskName));
+            // 判据 6：窗口（下游任何 FINISHED ⇒ 拦；行集合＝该实例全部任务行，两仓同形状）
+            var doingDescendants = RecallSupport.ValidateWindow(instance.Tasks, target);
+
+            // ── 判据全过，以下才允许写 ──
+            // 写 1＋2 聚合成一次变更：废弃下游未答行＋同节点复活新行（参与者＝原行名册、
+            // parent＝原行 parent、expire_time 同尺），实例 updateTime/updateUser 一并 touch
+            var resurrected = instance.RecallTask(node, target, op, doingDescendants,
+                FlowUtil.IsFirstTaskName(model, target.TaskName), _context.ClockOrDefault);
+            foreach (var t in doingDescendants)
+                await Repository.UpdateTaskAsync(t);
+            // 复活行走普通 saveTask（分配 taskId＋全量写参与者行）后补 fire 码 3。
+            // ⚠ 这里<b>不</b>过 saveNewTask 那条腿（委托自动生效／_branchCtx.root 回填）——逐字照
+            // java recallTask 的 `repository.saveTask(resurrected)`：复活行的参与者就是原行名册，
+            // 再并一次代理人等于把"你自己重办"改成"别人替你办"，与规范 04「参与者＝原行名册」相抵。
+            await Repository.SaveTaskAsync(resurrected);
+            await NotifyTaskStartAsync(resurrected);
+            // 写 3：原 FINISHED 行不改写，只盖 tf_recallHistory 追加账本（recalledTaskId 指向复活行）
+            RecallSupport.AppendRecallHistory(target, op, resurrected.TaskId, _context.ClockOrDefault);
+            // ⚠ 本栈两仓的 <c>UpdateInstanceAsync</c> 都会<b>按聚合副本级联覆写每一行任务</b>（v1.0.1），
+            // 而聚合里的这一份与门面取出的 <paramref name="target"/> 是<b>两个对象</b>（java 那边
+            // findInstanceById 直接给同一批引用、没有这条覆写腿）。只盖门面那份副本 ⇒ 下面那次
+            // updateInstance 会把账本<b>原样写回去抹掉</b>（内存档实测）。故同一枚账本也要盖到聚合那一份，
+            // 两个对象各得一条、对外读数与 java 逐字一致。
+            var aggregateTarget = instance.Tasks.FirstOrDefault(t => t.TaskId == target.TaskId);
+            if (aggregateTarget != null && !ReferenceEquals(aggregateTarget, target))
+                RecallSupport.AppendRecallHistory(aggregateTarget, op, resurrected.TaskId,
+                    _context.ClockOrDefault);
+            await Repository.UpdateTaskAsync(target);
+            await Repository.UpdateInstanceAsync(instance);
+            // 码 10 TASK_RECALL：撤回事实落库之后 fire 一次（sourceId＝被撤回的旧行；
+            // 载荷 instanceId / taskId / operator；复活行的待办另走上面那次码 3）
+            await ProcessPublisher.NotifyAsync(
+                new ProcessEvent
+                {
+                    EventType = ProcessEventType.TaskRecall,
+                    SourceId = target.TaskId,
+                    Data = new FlowData
+                    {
+                        ["instanceId"] = instance.InstanceId,
+                        ["taskId"] = target.TaskId,
+                        ["operator"] = op,
+                    },
+                },
+                _context.EventListeners);
+            return resurrected;
+        });
+    }
+
+    /// <summary>系统代执行（flow.auto）／超级管理员（flow.admin）——与
+    /// <see cref="ProcessTask.IsAllowed"/> 及门面 <c>IsPrivilegedOperator</c> 同一枚判据。</summary>
+    internal static bool IsPrivileged(string? op) =>
+        string.Equals(FlowConst.AutoId, op, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(FlowConst.AdminId, op, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 建<b>动态会签（征询模式）成员行</b>并逐行落库＋fire 码 3（issues/247，规范 04 · 动态会签
+    /// 「成员行建单规则」）——对齐 Go 腿 <c>engine.CreateCollectMemberRows</c>：判据（开关／参与人／
+    /// 加给自己／重复／上限／互斥）一律由<b>门面</b>在调用前拦下，报错即零写入由调用方保证，
+    /// 本腿只管建单，不再重复判。
+    ///
+    /// <para>每人一行：同节点同名、<c>ParentTaskId</c>＝主办行、轮次戳 <c>addSignRound_{节点}</c>＋
+    /// <c>tf_addSignReason</c> 两戳、分支归属照后加签那条腿（<see cref="ReapplySupport.BuildScopes"/>）、
+    /// 到期时间同尺（<see cref="ProcessInstance.CreateTask"/> 内已算）、委托照既有腿并入、
+    /// 落库后逐行 fire 码 3（规范 11：成员行建/结走既有 3/5，<b>不新增事件码</b>）。</para>
+    ///
+    /// <para><b>征询节点不可能是首任务节点</b>（解析期已拦，规范 02 §4.4），但仍照后加签腿
+    /// 用现成判据算 <c>isFirstTaskNode</c>、不写死 false——写死会让建单不变量的两参形状退化。</para>
+    /// </summary>
+    public Task<List<ProcessTask>> CreateCollectMemberRowsAsync(
+        ProcessInstance instance, ProcessModel model, TaskModel node, ProcessTask host,
+        string? op, List<string> operators, int round, string? reason)
+    {
+        return RunInTxAsync(async () =>
+        {
+            var created = new List<ProcessTask>();
+            var exec = BuildExecution(model, instance, instance.Variables, op);
+            var firstTaskNode = FlowUtil.IsFirstTaskName(model, node.Name);
+            foreach (var actor in operators)
+            {
+                // 建单不变量：parent＝主办行 id（成员行的身份锚——闸门判据、detail 投影、去重全靠它）
+                var member = instance.CreateTask(node, node.DisplayName,
+                    new List<string> { actor }, op, host.TaskId, firstTaskNode, _context.ClockOrDefault);
+                AddSignSupport.PutRound(member, node.Name, round);
+                if (!string.IsNullOrEmpty(reason))
+                    member.Variables[FlowConst.AddSignReason] = reason;
+                // 分支归属与每一次普通建单同一条腿（并行范围内的成员行必须继承父任务归属，
+                // 否则汇合判据读不到这一支）——照后加签建单腿。
+                ReapplySupport.PutScopes(member, ReapplySupport.BuildScopes(
+                    host, model, node.Name, member.TaskId));
+                await ApplySurrogateAsync(exec, member);
+                await Repository.SaveTaskAsync(member);
+                if (ReapplySupport.FillRootSelf(member))
+                    await Repository.UpdateTaskAsync(member);
+                await NotifyTaskStartAsync(member);
+                created.Add(member);
+            }
+            return created;
+        });
+    }
+
     // ═══ 退回修改、重提直返 ═══
 
     /// <summary>来源节点配置了 RETURN_TO_SOURCE 时的准入校验（不改任何状态）。</summary>

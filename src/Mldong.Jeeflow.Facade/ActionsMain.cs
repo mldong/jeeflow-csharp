@@ -274,6 +274,14 @@ public partial class JeeflowFacade
             if (kv.Key != FlowConst.ProcessTaskIdKey && kv.Key != "operator") flowArgs[kv.Key] = kv.Value;
         }
         flowArgs[FlowConst.SubmitType] = submitType;
+        // ── 动态会签分流与闸门（issues/247）——判据全部排在任何状态变更之前 ──
+        var collect = await TryDynamicCountersignAsync(taskId, op, flowArgs);
+        if (collect != null)
+        {
+            // 征询模式带 tf_addSignOperators：只建成员行、不办结主办行（响应带 marker 供前端提示）
+            return Ok(collect);
+        }
+        await GateDynamicCountersignAsync(taskId, flowArgs);
         // boot3 execute 分发（spec §11.2）
         if (submitType == (int)WfSubmitType.Reject)
         {
@@ -727,6 +735,14 @@ public partial class JeeflowFacade
                                 var ext = new Dictionary<string, object?>();
                                 foreach (var kv in taskNode.Ext) ext[kv.Key] = kv.Value;
                                 tm["ext"] = ext; // issues/62：taskModel 补 form/ext（字段权限键）
+                            }
+                            // 动态会签投影（issues/247，规范 06 §2.7）：征询主办行 ext.dynamicCountersign
+                            // 从成员行 task_parent_id <b>现算</b>、不落新存储；前端据此将执行按钮全部置灰。
+                            // 无成员行 ⇒ null ⇒ 这个键压根不出现（不是给一个空对象让前端猜）。
+                            if (node is TaskModel dcNode && dcNode.DynamicCountersign)
+                            {
+                                var dc = CollectSupport.BuildProjection(inst.Tasks, task);
+                                if (dc != null) tExt["dynamicCountersign"] = dc;
                             }
                             vo["taskModel"] = tm;
                             break;

@@ -90,6 +90,26 @@ public class ProcessInstance
         Touch(op, clock);
     }
 
+    /// <summary>
+    /// 已办撤回（issues/246，规范 04 · 已办撤回）：判据由 <see cref="RecallSupport"/> 前置
+    /// （报错即零写入），本方法只做两件写——<b>废弃下游未答行</b>＋<b>复活新行</b>
+    /// （同节点同名、参与者＝原行名册、<c>ParentTaskId</c>＝原行 parent、到期时间同尺）。
+    /// <para><b>原 FINISHED 行一律不改写</b>（历史即任务行）；它的 <c>tf_recallHistory</c> 账本要等
+    /// 复活行拿到 taskId 才能盖，由引擎在落库后补盖（<see cref="RecallSupport.AppendRecallHistory"/>）。
+    /// 落库序照 java <c>ProcessInstance.recallTask</c>：先废弃、后建单、再 touch 实例。</para>
+    /// </summary>
+    /// <returns>复活的新行（DOING，唯一活待办）</returns>
+    public ProcessTask RecallTask(TaskModel node, ProcessTask target, string? op,
+                                  List<ProcessTask> doingDescendants, bool isFirstTaskNode,
+                                  IClock? clock = null)
+    {
+        foreach (var t in doingDescendants) t.Abandon(op, clock);
+        var resurrected = CreateTask(node, target.DisplayName,
+            new List<string>(target.ActorIds), op, target.ParentTaskId, isFirstTaskNode, clock);
+        Touch(op, clock);
+        return resurrected;
+    }
+
     /// <summary>流程完成。</summary>
     public void Finish(IClock? clock = null)
     {

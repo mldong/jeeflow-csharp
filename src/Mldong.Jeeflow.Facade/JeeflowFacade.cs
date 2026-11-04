@@ -94,6 +94,8 @@ public partial class JeeflowFacade
                 "processTask/addCandidate" => await TaskSurrogateAsync(args),
                 "processTask/transfer" => await TaskTransferAsync(args),
                 "processTask/removeTaskActor" => await TaskRemoveActorAsync(args),  // issues/115 第 47 个 action
+                "processTask/recall" => await TaskRecallAsync(args),                 // issues/246 已办撤回
+                "processTask/revokeDynamicCountersign" => await TaskRevokeCountersignAsync(args), // issues/247
                 "processTask/latest" => await TaskLatestAsync(args),
                 // ── 流程设计 ──
                 "processDesign/page" => await DesignPageAsync(args),
