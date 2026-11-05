@@ -134,6 +134,13 @@ public sealed class DefaultActionPermissionProvider : IActionPermissionProvider
         ["processDefine/getLastByName"] = new[] { "wf:processDefine:detail", "wf:processDesign:listByType", "wf:processDefine:getLastByName" },
         ["processTask/candidatePage"] = new[] { "wf:processTask:execute", "wf:processTask:candidatePage" },
         ["processTask/jumpAbleTaskNameList"] = new[] { "wf:processTask:execute" },
+        // issues/246／247 两枚新 action（owner 2026-11-04 拍 B）：**复用"办理"这枚码**，不另建 sys_menu 按钮种子。
+        // 判据是既有惯例——transfer／removeTaskActor／candidatePage／latest 都没有 sys_menu 按钮行，
+        // candidatePage／jumpAbleTaskNameList 就是走本表复用 execute；而撤回／撤会签的主体按引擎判据
+        // 本来就必然是该行参与者（＝有办理权的人），拆独立码实际给不出去，只会多一处存量库补种子的迁移。
+        // 与 java DefaultActionPermissionProvider.OR_RULES 同源（六语言同款落点见各集成壳的权限表）。
+        ["processTask/recall"] = new[] { "wf:processTask:execute" },
+        ["processTask/revokeDynamicCountersign"] = new[] { "wf:processTask:execute" },
     };
 
     private static readonly HashSet<string> NoPermActions = new()

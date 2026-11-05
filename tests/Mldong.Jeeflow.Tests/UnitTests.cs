@@ -522,6 +522,41 @@ public class MetadataPermissionTests
     }
 
     [Fact]
+    public void DefaultPermissionProvider_NewActionsRideExecuteCode()
+    {
+        // issues/246／247 B 案粒度（与 java DefaultActionPermissionProvider 同源）：
+        // 两枚新 action 复用"办理"这枚码，不派生成 wf:processTask:recall／
+        // wf:processTask:revokeDynamicCountersign，也不新建菜单按钮种子。
+        var p = new DefaultActionPermissionProvider();
+        Assert.Equal(new[] { "wf:processTask:execute" }, p.PermissionCodes("processTask/recall"));
+        Assert.Equal(new[] { "wf:processTask:execute" }, p.PermissionCodes("processTask/revokeDynamicCountersign"));
+
+        // 反向哨兵：没配进两张表的 action 必须仍走默认派生 wf:{action /→:}，
+        // 否则"整族都被塞进 execute"这种错法会被本测试放过。
+        Assert.Equal(new[] { "wf:processTask:transfer" }, p.PermissionCodes("processTask/transfer"));
+        Assert.Equal(new[] { "wf:processTask:removeTaskActor" }, p.PermissionCodes("processTask/removeTaskActor"));
+    }
+
+    [Fact]
+    public void DefaultPermissionProvider_TableShapeMatchesJava()
+    {
+        // 两张表的条目数钉住（对齐 java OR_RULES 7 条／NO_PERM_ACTIONS 11 条）。
+        // 刻意写死数字：它不是"会漂的读数"，而是跨栈契约的形状锚——加一条规则要八栈同批改。
+        var or = PrivateStaticField<Dictionary<string, string[]>>("OrRules");
+        var noPerm = PrivateStaticField<HashSet<string>>("NoPermActions");
+        Assert.Equal(7, or.Count);
+        Assert.Equal(11, noPerm.Count);
+    }
+
+    private static T PrivateStaticField<T>(string name)
+    {
+        var f = typeof(DefaultActionPermissionProvider)
+            .GetField(name, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(f);
+        return (T)f!.GetValue(null)!;
+    }
+
+    [Fact]
     public void EnumDictRegistry_LabelsMatchJava()
     {
         var reg = new EnumDictRegistry();
