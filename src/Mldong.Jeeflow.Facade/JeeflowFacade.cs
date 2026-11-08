@@ -468,6 +468,9 @@ public partial class JeeflowFacade
             ["processDefineName"] = r.ProcessDefineName,
             ["processDefineDisplayName"] = r.ProcessDefineDisplayName,
             ["instanceCreateTime"] = FmtTime(r.InstanceCreateTime),
+            // issues/250：所属实例的状态（整数，键名逐字 instanceState）——前端据此把实例已结束的
+            // 已办行撤回按钮置灰。待办/已办共用本转换 ⇒ 两个列表都带；撤回判据一行未动。
+            ["instanceState"] = r.InstanceState,
             ["ext"] = ext,
             ["instanceExt"] = instanceExt,
             ["version"] = r.ProcessDefineVersion,

@@ -630,9 +630,13 @@ public class MySqlRepository : IProcessRepository
 
         var order = BuildOrder(query, "t.", TaskWhitelist);
         var limitSql = where + order + $" LIMIT {SafeLimit(query.PageSize)} OFFSET {SafeOffset(query.PageNum, query.PageSize)}";
+        // issues/250：pi.state 补投成 instance_state——列表本来就 LEFT JOIN 了实例表，只是没把这一列
+        // 投出来，前端无从预判「实例已非进行中」（已办行撤回按钮每行可点、点了才被引擎拒）。
+        // 待办/已办共用这条 SELECT ⇒ 两个列表都带；不新增关联、不改任何撤回判据。
         const string dataSelect =
             "SELECT DISTINCT t.*, pd.name AS process_define_name, pd.display_name AS process_define_display_name, " +
-            "pd.version AS process_define_version, pi.variable AS instance_variable, pi.create_time AS instance_create_time";
+            "pd.version AS process_define_version, pi.variable AS instance_variable, pi.create_time AS instance_create_time, " +
+            "pi.state AS instance_state";
         var rows = new List<IProcessRepository.TaskRow>();
         await using var cmd = NewCmd(dataSelect + limitSql, conn);
         foreach (var b in bind) cmd.Parameters.Add(new MySqlParameter { Value = b ?? DBNull.Value });
@@ -663,6 +667,9 @@ public class MySqlRepository : IProcessRepository
                 ProcessDefineVersion = GetInt(rs, "process_define_version"),
                 InstanceVariable = GetStr(rs, "instance_variable"),
                 InstanceCreateTime = GetDateTime(rs, "instance_create_time"),
+                // issues/250：state 列是 INT NULL（非 tinyint(1)，连接串另钉 TreatTinyAsBoolean=False），
+                // GetInt 的 GetInt32 形状对得上；LEFT JOIN 落空 ⇒ IsDBNull ⇒ null，不硬兜 0/10。
+                InstanceState = GetInt(rs, "instance_state"),
             });
         }
         return PageResult<IProcessRepository.TaskRow>.Of(query.PageNum, query.PageSize, total, rows);

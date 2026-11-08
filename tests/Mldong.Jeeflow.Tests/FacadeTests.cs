@@ -195,6 +195,8 @@ public class FacadeTests : IDisposable
         Assert.Equal("上级审批", row["displayName"]); // pd 关联
         Assert.NotNull(row["ext"]);                    // ext 契约
         Assert.Equal(1, Convert.ToInt32(row["version"]));
+        // issues/250：所属实例状态随行投出（camelCase 键），实例进行中 ⇒ 10
+        Assert.Equal((int)WfInstanceState.Doing, Convert.ToInt32(row["instanceState"]));
 
         // 无关人待办为空
         var todo2 = await _facade.FlowAsync("processTask/todoList",
@@ -208,6 +210,10 @@ public class FacadeTests : IDisposable
         var done = await _facade.FlowAsync("processTask/doneList",
             new FlowData { ["operator"] = "leader" });
         Assert.Equal(1, Convert.ToInt32(((Dictionary<string, object?>)done["data"]!)["recordCount"]));
+        // issues/250：实例已结束 ⇒ 已办行任务态仍 20，但 instanceState 必须 20（前端据此置灰撤回）
+        var doneRow = (Dictionary<string, object?>)((List<object?>)((Dictionary<string, object?>)done["data"]!)["rows"]!)[0]!;
+        Assert.Equal((int)WfTaskState.Finished, Convert.ToInt32(doneRow["taskState"]));
+        Assert.Equal((int)WfInstanceState.Finished, Convert.ToInt32(doneRow["instanceState"]));
     }
 
     [Fact]

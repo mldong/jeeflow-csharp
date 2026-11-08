@@ -873,6 +873,8 @@ public class MemoryRepository : IProcessRepository
         ["process_define_version"] = pd?.Version,
         ["instance_variable"] = pi == null ? null : ToJson(pi.Variables),
         ["instance_create_time"] = pi?.CreateTime,
+        // issues/250：与 SQL 仓 `pi.state AS instance_state` 同一投影（两仓同答案，issues/117 场景 27 那把尺子）
+        ["instance_state"] = pi?.State,
     };
 
     protected IProcessRepository.TaskRow RowToTask(Dictionary<string, object?> d) => new()
@@ -899,6 +901,7 @@ public class MemoryRepository : IProcessRepository
         ProcessDefineVersion = AsInt(d, "process_define_version"),
         InstanceVariable = AsStr(d, "instance_variable"),
         InstanceCreateTime = AsDate(d, "instance_create_time"),
+        InstanceState = AsInt(d, "instance_state"),   // issues/250
     };
 
     protected static Dictionary<string, object?> InstanceToDict(

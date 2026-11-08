@@ -226,6 +226,14 @@ public interface IProcessRepository
         public int? ProcessDefineVersion { get; set; }
         public string? InstanceVariable { get; set; }
         public DateTime? InstanceCreateTime { get; set; }
+        /// <summary>
+        /// 所属流程实例的状态（issues/250）：10 进行中／20 已完成／30 撤回／40 终止／45 拒绝／50 挂起／99 废弃。
+        /// <para>列表查询本来就关联了 <c>wf_process_instance</c>（别名 pi），这里只把 <c>pi.state</c> 投出来
+        /// （SQL 别名 <c>instance_state</c>），供前端把「实例已非进行中」的已办行撤回按钮置灰——
+        /// 任务行自身的 <see cref="TaskState"/> 照不出这一格：实例走完时它仍是 FINISHED(20)。
+        /// <b>待办与已办共用同一投影</b>，两个列表都带；不新增关联、不解析流程定义、不改任何撤回判据。</para>
+        /// </summary>
+        public int? InstanceState { get; set; }
     }
 
     /// <summary>实例行数据。</summary>

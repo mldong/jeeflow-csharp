@@ -82,6 +82,33 @@ public abstract class RepositoryBehaviorSuite
         Assert.NotNull(row.InstanceVariable); // JOIN 关联列
     }
 
+    /// <summary>
+    /// issues/250：列表行必须带所属流程实例的状态 <c>InstanceState</c>（内存/MySQL 双跑同一判据）。
+    /// 承重档＝实例结束后读已办：任务态仍是 20，只有 InstanceState 能告诉前端这单已走完
+    /// （任务态照不出这一格）。内部对照＝同一实例结束前读待办行必须是 Doing(10)，
+    /// 两格合起来挡住「恒 10 / 恒 20 / 恒 null」。内存仓也设了该字段，故双跑才能照出 SQL 漏投。
+    /// </summary>
+    [Fact]
+    public virtual async Task Behavior_TaskRowCarriesInstanceState()
+    {
+        var (engine, _, repo) = Build();
+        var (_, iid) = await SeedSimpleFlowAsync(engine, repo, "BHV-250");
+
+        var todo = await repo.PageTodoTasksAsync(new PageQuery(1, 50).Add("pta.actor_id", "EQ", "leader"));
+        var todoRow = todo.Rows.FirstOrDefault(r => r.ProcessInstanceId == iid);
+        Assert.NotNull(todoRow);
+        Assert.Equal((int)WfInstanceState.Doing, todoRow!.InstanceState!.Value);
+
+        var task = await FindDoingByActorAsync(repo, iid, "leader");
+        await engine.ExecuteProcessTaskAsync(task.TaskId!.Value, "leader", new FlowData());
+
+        var done = await repo.PageDoneTasksAsync(new PageQuery(1, 50).Add("t.operator", "EQ", "leader"));
+        var doneRow = done.Rows.FirstOrDefault(r => r.Id == task.TaskId);
+        Assert.NotNull(doneRow);
+        Assert.Equal((int)WfTaskState.Finished, doneRow!.TaskState!.Value);
+        Assert.Equal((int)WfInstanceState.Finished, doneRow.InstanceState!.Value);
+    }
+
     [Fact]
     public virtual async Task Behavior_CcCreateAndUpdateStatus()
     {
