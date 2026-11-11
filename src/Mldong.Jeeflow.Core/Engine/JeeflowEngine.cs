@@ -597,7 +597,13 @@ public class JeeflowEngine
         // 同样必须排在 CompleteTask 之前：post 串本来是在 node.ExecuteAsync（办结之后）才解析的，
         // 内存仓储无回滚 ⇒ 幽灵名报错那次「当前任务已 DONE、新任务没建」⇒ 实例 DOING 却零待办。
         // 纯读方法（ValidateDeclaredInterceptors 只查名字、不跑拦截器，InterceptAsync 有执行期副作用）。
-        model.GetNode(task.TaskName)?.ValidateDeclaredInterceptors(model, _context.NamedInterceptors);
+        var currentNode = model.GetNode(task.TaskName);
+        currentNode?.ValidateDeclaredInterceptors(model, _context.NamedInterceptors);
+
+        // 已办撤回开关快照（issues/251）：把当前节点的 allowRecall 开关值盖到执行入参，随办结落已完成行变量。
+        // 必须排在 CompleteTask 之前（盖章要进本次办理的行变量），且排在拦截器可解析校验之后（校验报错即零写入）。
+        // 缺省 false 也盖章；tf_ 前缀键合并进实例变量时被 CompleteTask 剔除，只留在任务行。
+        RecallSupport.StampAllowRecall(args, currentNode);
 
         // 完成任务——聚合根内部修改了 instance 中的 task 状态
         instance.CompleteTask(taskId, op, args, _context.ClockOrDefault);

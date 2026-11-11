@@ -187,6 +187,10 @@ public partial class JeeflowFacade
             var doing = t.TaskState == (int)WfTaskState.Doing;
             // issues/128：这里曾无条件按拓扑覆写，把建单时写在行上的值盖掉 ⇒ 与其余七栈相反
             ext[FlowConst.IsFirstTaskNode] = RowFirstOrCompute(ext, doing, t.TaskName, firstTaskNodeId);
+            // issues/251：已办行盖章才投顶层布尔 allowRecall（DOING ⇒ 不投；缺键 ⇒ 无字段）。
+            // 从行变量副本 ext 取（tf_ 键只落任务行，不进实例变量）；布尔语义与 TaskRowToMap 同口径。
+            var rowRecall = doing ? null : ext.GetValueOrDefault(FlowConst.AllowRecall);
+            if (rowRecall != null) vo["allowRecall"] = RowFirstIsTrue(rowRecall);
             vo["ext"] = ext;
             tasks.Add(vo);
             if (doing) activeTaskList.Add(vo);

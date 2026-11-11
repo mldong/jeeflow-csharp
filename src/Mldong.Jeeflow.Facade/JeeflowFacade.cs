@@ -433,6 +433,10 @@ public partial class JeeflowFacade
     {
         var instanceExt = ParseJsonMap(r.InstanceVariable);
         var ext = ParseJsonMap(r.Variable);
+        // issues/251：已办撤回开关快照——只从**行变量**取（办理时盖章落此行），且必须排在下方
+        // 「仅控制键则回退实例变量」之前：回退会把 ext 换成实例变量副本，而 tf_ 键从不进实例变量，
+        // 回退后再取必然落空。DOING 行一律不投（撤回是已办行的能力）；缺键 ⇒ null ⇒ 不加字段。
+        var rowRecall = r.TaskState == (int)WfTaskState.Doing ? null : ext.GetValueOrDefault(FlowConst.AllowRecall);
         // issues/121 P1：引擎建单必写的控制键不算「任务变量非空」，否则新建任务的 ext
         // 永远不再回退实例变量（issues/82-3 既有契约）。控制键集合除行级首节点标记外，还含
         // spec 04 的两枚直返保留键（建单时无条件写入、空分支也写 []）——不认它们，每条任务行
@@ -447,7 +451,7 @@ public partial class JeeflowFacade
                 fallback[ReapplySupport.VarReapplyCtx] = reapplyCtx;
             ext = fallback;
         }
-        return new Dictionary<string, object?>
+        var m = new Dictionary<string, object?>
         {
             ["id"] = r.Id,
             ["processInstanceId"] = r.ProcessInstanceId,
@@ -476,6 +480,10 @@ public partial class JeeflowFacade
             ["version"] = r.ProcessDefineVersion,
             ["taskFormData"] = FormDataOf(ParseJsonMap(r.Variable), FlowConst.TaskFormDataPrefix),
         };
+        // issues/251：已办行盖章才投顶层布尔 allowRecall（缺键 ⇒ 无字段；DOING ⇒ rowRecall 恒 null）。
+        // 布尔语义走 RowFirstIsTrue（与 java Boolean.parseBoolean 同口径，脏值不翻真）。撤回判据一行未动。
+        if (rowRecall != null) m["allowRecall"] = RowFirstIsTrue(rowRecall);
+        return m;
     }
 
     internal static Dictionary<string, object?> DefineRowToMap(IProcessRepository.DefineRow r) => new()

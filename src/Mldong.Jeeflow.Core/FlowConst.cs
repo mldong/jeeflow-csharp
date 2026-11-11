@@ -47,6 +47,11 @@ public static class FlowConst
     /// </summary>
     public const string RecallHistory = "tf_recallHistory";
     /// <summary>
+    /// 已办撤回开关快照（issues/251）：办理时把<b>当前节点</b>的 <c>allowRecall</c> 开关值盖到执行入参，
+    /// 落已完成任务行变量；出口只投已办行（DOING 不投）。缺省 false 也盖章（键恒在）。
+    /// </summary>
+    public const string AllowRecall = "tf_allowRecall";
+    /// <summary>
     /// 动态会签（issues/247）发起原因：选填，随账本条目落库并<b>盖到每条成员行</b>
     /// （单行出证自足，不回查主办行）。
     /// </summary>

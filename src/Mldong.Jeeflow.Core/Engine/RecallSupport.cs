@@ -53,6 +53,18 @@ public static class RecallSupport
     public static bool NodeEnabled(NodeModel? node) =>
         node is TaskModel task && task.AllowRecall;
 
+    /// <summary>
+    /// 办理时快照（issues/251）：把<b>当前节点</b>的 <c>allowRecall</c> 开关值盖到执行入参
+    /// （对齐 Java <c>RecallSupport.stampAllowRecall</c>）。仅当当前节点是 <see cref="TaskModel"/> 时盖章，
+    /// <b>缺省 false 也盖章</b>（键恒在，出口据此区分"未盖章的历史行"与"盖章为 false 的行"）。
+    /// <para>只写 <c>tf_</c> 前缀键，合并进实例变量时被 <see cref="ProcessInstance.CompleteTask"/> 剔除。</para>
+    /// </summary>
+    public static void StampAllowRecall(FlowData? args, NodeModel? node)
+    {
+        if (args == null || node is not TaskModel task) return;
+        args[FlowConst.AllowRecall] = task.AllowRecall;
+    }
+
     // ═══ 窗口判据（必须排在任何状态变更之前）═══
 
     /// <summary>
