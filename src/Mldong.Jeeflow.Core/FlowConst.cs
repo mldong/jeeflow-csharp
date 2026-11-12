@@ -216,6 +216,14 @@ public enum ProcessEventType
 /// <summary>任务类型 codeOf（C4：code/'CODE'/中文 message 容错，兜底 Major）。</summary>
 public static class Enums
 {
+    /// <summary>节点级协办禁配文案（规范 02 §4.4，issues/252）。
+    /// <para>协办档只由运行期 <c>processTask/aidant</c> 派生（issues/253）；节点上配协办在 snaker
+    /// 原义下办结不驱动且跳转同闸＝"流程悬挂"陷阱，故**解析期**报错、不做运行时降级。
+    /// 节点名取节点 <c>Name</c>（＝节点 id，与 <c>AddSignSupport</c>／<c>RecallSupport</c> 同尺）。
+    /// 其余不可识别值（如设计器现状写的 <c>Aidant</c>）维持既有静默回落 Major，
+    /// 不扩成 fail-fast（issues/245 口径）。</para></summary>
+    public const string MsgTaskTypeAssistForbidden = "节点[{0}]不允许配置协办任务类型（taskType=1）";
+
     public static WfTaskType TaskTypeCodeOf(object? code)
     {
         if (code == null) return WfTaskType.Major;

@@ -283,6 +283,16 @@ public static class ModelParser
                 task.Assignee = Str(properties, AssigneeKey);
                 task.AssignmentHandler = Str(properties, AssignmentHandleKey);
                 task.TaskType = Enums.TaskTypeCodeOf(Obj(properties, TaskTypeKey));
+                // 节点级协办禁配（规范 02 §4.4，issues/252）：上面那张容错表把 1／"1"／
+                // "Secondary"（忽略大小写）／"协办" 都折成 Secondary(1)，凡折到这一档一律
+                // **解析期报错**，不做运行时降级——snaker 原义下协办节点办结不驱动且跳转同闸，
+                // 配了就是"流程悬挂"陷阱；协办档今后只由运行期 processTask/aidant 派生（issues/253）。
+                // 判据挂在 codeOf 的**返回值**上（不另写一份别名清单），容错表将来加条目也自动覆盖。
+                // 其余不可识别值（"Aidant" 等）维持既有静默回落 Major，不扩成 fail-fast（issues/245）。
+                // RECORD(2) 与 custom 记录行不受影响（本刀只在 TaskModel 这一支）。
+                if (task.TaskType == WfTaskType.Secondary)
+                    throw new JeeflowException(
+                        string.Format(Enums.MsgTaskTypeAssistForbidden, task.Name));
                 task.PerformType = Enums.PerformTypeCodeOf(Obj(properties, PerformTypeKey));
                 task.ReminderTime = Str(properties, ReminderTimeKey);
                 task.ReminderRepeat = Str(properties, ReminderRepeatKey);
