@@ -2,14 +2,14 @@
   "_meta": {
     "version": "1.0",
     "created": "2026-09-06",
-    "purpose": "jeeflow C# 引擎（第 8 语言）M0 契约固化 —— 49 action 清单（第 48/49 条＝issues/246 processTask/recall 与 issues/247 processTask/revokeDynamicCountersign，2026-11-04 六腿对齐轮补录；原第 47 条＝issues/115 processTask/removeTaskActor，批二 §3-8）（Java 实查 ↔ 规范 ↔ MoonBit manifest ↔ C# 四方核对基准）",
+    "purpose": "jeeflow C# 引擎（第 8 语言）M0 契约固化 —— 50 action 清单（第 50 条＝issues/253 processTask/aidant；第 48/49 条＝issues/246 processTask/recall 与 issues/247 processTask/revokeDynamicCountersign，2026-11-04 六腿对齐轮补录；原第 47 条＝issues/115 processTask/removeTaskActor，批二 §3-8）（Java 实查 ↔ 规范 ↔ MoonBit manifest ↔ C# 四方核对基准）",
     "sources": {
       "java": "jeeflow-java/jeeflow-core/src/main/java/com/mldong/jeeflow/facade/JeeflowFacade.java flow() switch（L100-L155）",
       "spec": "jeeflow-doc/docs/spec/06-facade.md",
       "plan": "jeeflow-hub/docs/moonbit-engine-implementation-plan.md §0.1/§3.3/§4",
       "moon_manifest": "jeeflow-moon/docs/action-manifest.json（双 diff 基线，2026-09-05 与 Java diff 为空）"
     },
-    "count": 49,
+    "count": 50,
     "baseline": {
       "note": "spec 基线锚定（方案 §5 M0 通过条件）——每阶段收尾复核上游漂移",
       "java_head": "b7ef670 chore(release): v1.8.27",
@@ -318,6 +318,14 @@
           "resp": "ok；data={revoked（条数）, actors（被撤的人）}；失败 99999999 + msg：operator 必填 / processTaskId 缺失 / 任务不存在 / 流程实例不存在 / 无权限撤回该动态会签 / 节点[x]没有进行中的动态会签（八栈逐字统一）"
         },
         {
+          "action": "processTask/aidant",
+          "method": "taskAidant",
+          "permission": "wf:processTask:execute",
+          "note": "issues/253 动态协办（第 50 个 action）：主办把「这活」交给别人干——按人派生 task_type=1 协办子行（parent＝主办行、同节点同名），主办行原样保留 DOING；**协办行办结不驱动流程**（推进闸），节点推进仍由主办行办结触发。waitCompletion 选填 bool、缺省 false＝不等协办办结即可推进；true 时主办提前办结被等待闸拦（零写入＋逐字文案）、协办齐后放行，离开节点清场。留痕＝tf_aidantHistory 追加式账本（派生＋协办办结两跳，主办办结后仍在）＋tf_aidantReason/tf_aidantWait；detail 对主办行投影 ext.aidant={active,round,total,submitted,actors[],wait}（AidantSupport.BuildProjection 从 task_parent_id＋task_type 现算、不落新存储）。与征询靠 task_type 分辨（协办 1／征询成员 0），两闸各数互不污染；会签合并判据显式排除协办行。权限码复用 wf:processTask:execute（OR 规则，照 246/247 B 案惯例，见 Core/Spi/ServiceSpi.cs）",
+          "req": "{processTaskId 必填(主办行), operator 硬必填(空/纯空白→operator 必填，严禁回落 user1), actorIds 必填(逗号串或数组，走 spec 06 §2.11 归一单点), reason 选填, waitCompletion 选填 bool 缺省 false}",
+          "resp": "ok；data=null；失败 99999999 + msg 逐字见 spec/06 跨栈统一文案表协办六行：operator 必填 / actorIds 必填 / 无权限派生协办任务 / 任务非进行中，不可派生协办 / 该人已有未办结的协办任务 / 协办任务不能再派生协办（另 processTaskId 缺失 / 任务不存在 / 等待闸未齐逐字文案）"
+        },
+        {
           "action": "processTask/latest",
           "method": "taskLatest",
           "permission": null,
@@ -449,11 +457,11 @@
     }
   },
   "summary": {
-    "total": 49,
+    "total": 50,
     "byGroup": {
       "processDefine": 8,
       "processInstance": 14,
-      "processTask": 13,
+      "processTask": 14,
       "processDesign": 9,
       "processSurrogate": 5
     },
