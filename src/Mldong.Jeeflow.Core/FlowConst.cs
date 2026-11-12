@@ -57,6 +57,21 @@ public static class FlowConst
     /// </summary>
     public const string AddSignReason = "tf_addSignReason";
     /// <summary>
+    /// 动态协办（issues/253）追加式账本：落<b>主办行</b>变量，每次派生 append
+    /// <c>{round, fromActor, toActors, reason, time, operator}</c>；离开节点清场时追加一条带
+    /// <c>abandoned=true</c> 的条目（照征询撤回的 <c>revoked</c>）。只追加不覆盖。
+    /// </summary>
+    public const string AidantHistory = "tf_aidantHistory";
+    /// <summary>
+    /// 动态协办（issues/253）派生原因：选填，盖每条协办行（单行出证自足）；<b>不占 tf_approvalComment</b>。
+    /// </summary>
+    public const string AidantReason = "tf_aidantReason";
+    /// <summary>
+    /// 动态协办（issues/253）等待闸开关：派生时把 <c>waitCompletion</c> 盖在主办行变量上，缺省 false＝不等。
+    /// <c>tf_</c> 前缀使实例合并自动剥键（不传播）；投影 <c>ext.aidant.wait</c> 同源。
+    /// </summary>
+    public const string AidantWait = "tf_aidantWait";
+    /// <summary>
     /// 后加签轮次号键前缀（拼 <c>_{节点名}</c>）。
     /// <para><b>不复用会签的 <see cref="LoopCounter"/></b>：后者是「退回上一步」复活血缘时被
     /// <see cref="ProcessInstance.RejectTask"/> 的变量腿剔掉的会签簿记，而加签链的轮次要跨

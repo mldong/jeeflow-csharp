@@ -66,7 +66,10 @@ public static class CollectSupport
         if (tasks == null || host?.TaskId == null || host.TaskName == null) return outList;
         foreach (var t in tasks)
         {
-            if (host.TaskId.Equals(t.ParentTaskId) && host.TaskName.Equals(t.TaskName, StringComparison.Ordinal))
+            if (host.TaskId.Equals(t.ParentTaskId) && host.TaskName.Equals(t.TaskName, StringComparison.Ordinal)
+                // issues/253：协办行（task_type=1）也满足 parent＋同节点同名，但它属另一族
+                // ——征询收齐闸只数征询成员行（task_type=0），两闸各数各的（规范 04「与征询并存」）。
+                && !AidantSupport.IsAidantRow(t))
                 outList.Add(t);
         }
         return outList;
@@ -79,6 +82,8 @@ public static class CollectSupport
     public static bool IsMemberRow(IEnumerable<ProcessTask>? tasks, ProcessTask? row)
     {
         if (tasks == null || row?.ParentTaskId == null || row.ParentTaskId == 0L) return false;
+        // issues/253：协办行（task_type=1）不是征询成员行——两族靠 task_type 分辨。
+        if (AidantSupport.IsAidantRow(row)) return false;
         foreach (var t in tasks)
         {
             if (row.ParentTaskId.Equals(t.TaskId)

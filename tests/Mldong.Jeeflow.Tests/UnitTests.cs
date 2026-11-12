@@ -530,6 +530,8 @@ public class MetadataPermissionTests
         var p = new DefaultActionPermissionProvider();
         Assert.Equal(new[] { "wf:processTask:execute" }, p.PermissionCodes("processTask/recall"));
         Assert.Equal(new[] { "wf:processTask:execute" }, p.PermissionCodes("processTask/revokeDynamicCountersign"));
+        // issues/253 动态协办照 246/247 B 案惯例复用「办理」这枚码（加法期望，与 java OR_RULES 同源）。
+        Assert.Equal(new[] { "wf:processTask:execute" }, p.PermissionCodes("processTask/aidant"));
 
         // 反向哨兵：没配进两张表的 action 必须仍走默认派生 wf:{action /→:}，
         // 否则"整族都被塞进 execute"这种错法会被本测试放过。
@@ -540,11 +542,11 @@ public class MetadataPermissionTests
     [Fact]
     public void DefaultPermissionProvider_TableShapeMatchesJava()
     {
-        // 两张表的条目数钉住（对齐 java OR_RULES 7 条／NO_PERM_ACTIONS 11 条）。
+        // 两张表的条目数钉住（对齐 java OR_RULES 8 条／NO_PERM_ACTIONS 11 条）。
         // 刻意写死数字：它不是"会漂的读数"，而是跨栈契约的形状锚——加一条规则要八栈同批改。
         var or = PrivateStaticField<Dictionary<string, string[]>>("OrRules");
         var noPerm = PrivateStaticField<HashSet<string>>("NoPermActions");
-        Assert.Equal(7, or.Count);
+        Assert.Equal(8, or.Count);
         Assert.Equal(11, noPerm.Count);
     }
 

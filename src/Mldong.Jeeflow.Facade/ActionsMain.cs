@@ -748,6 +748,11 @@ public partial class JeeflowFacade
                                 var dc = CollectSupport.BuildProjection(inst.Tasks, task);
                                 if (dc != null) tExt["dynamicCountersign"] = dc;
                             }
+                            // 动态协办投影（issues/253，规范 06 §2.7）：主办行 ext.aidant 从 task_parent_id＋
+                            // task_type=1 现算、不落新存储。**无节点开关**——协办档只由运行期派生，任何任务节点
+                            // 都可能有；无协办行 ⇒ null ⇒ 这个键压根不出现。tExt 是活引用，改了就可见。
+                            var aidant = AidantSupport.BuildProjection(inst.Tasks, task);
+                            if (aidant != null) tExt["aidant"] = aidant;
                             vo["taskModel"] = tm;
                             break;
                         }

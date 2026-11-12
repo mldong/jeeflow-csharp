@@ -165,12 +165,16 @@ public static class AddSignSupport
 
     // ═══ 推进闸与废弃 ═══
 
-    /// <summary>本节点是否还有未完成任务（刚办结那条此刻已是 FINISHED，不计入）。</summary>
+    /// <summary>本节点是否还有未完成任务（刚办结那条此刻已是 FINISHED，不计入）。
+    /// issues/253：协办行（task_type=1）不算「兄弟待办」——它不驱动流程、不是接力链的一环，
+    /// 算进来会让 waitCompletion=false 的主办在加签/征询节点上被协办行挡住推进（规范 04
+    /// 「缺省 false 主办可随时推进」）。协办行的等待由 <see cref="AidantSupport.GateWait"/> 单独裁决。</summary>
     public static bool HasDoingOnNode(ProcessInstance? instance, string? nodeName)
     {
         if (instance?.Tasks == null || nodeName == null) return false;
         foreach (var t in instance.Tasks)
-            if (nodeName.Equals(t.TaskName, StringComparison.Ordinal) && t.IsDoing()) return true;
+            if (nodeName.Equals(t.TaskName, StringComparison.Ordinal) && t.IsDoing()
+                && !AidantSupport.IsAidantRow(t)) return true;
         return false;
     }
 

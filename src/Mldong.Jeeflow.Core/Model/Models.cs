@@ -285,14 +285,22 @@ public class TaskModel : NodeModel
         if (PerformType == WfPerformType.Countersign)
         {
             await new CountersignHandler(this).HandleAsync(execution);
-            if (execution.IsMerged) await RunOutTransitionAsync(execution);
+            if (execution.IsMerged)
+            {
+                AbandonAidantOnLeave(execution);
+                await RunOutTransitionAsync(execution);
+            }
         }
         else if (AllowAddSign)
         {
             // 后加签档：推进闸交给 AddSignHandler 裁决（本次点人→同节点续建且不流转；
             // 没点人但本节点还有兄弟待办→不流转；两者皆否→放行出边）。
             await new AddSignHandler(this).HandleAsync(execution);
-            if (execution.IsMerged) await RunOutTransitionAsync(execution);
+            if (execution.IsMerged)
+            {
+                AbandonAidantOnLeave(execution);
+                await RunOutTransitionAsync(execution);
+            }
         }
         else if (DynamicCountersign)
         {
@@ -300,13 +308,29 @@ public class TaskModel : NodeModel
             // 到不了这里）；能走进执行闸的只有成员行办结与主办行收齐后的拍板——两者复用
             // AddSignHandler 推进闸：主办还 DOING ⇒ merged=false 节点不动；主办办结且成员清零 ⇒ 放行。
             await new AddSignHandler(this).HandleAsync(execution);
-            if (execution.IsMerged) await RunOutTransitionAsync(execution);
+            if (execution.IsMerged)
+            {
+                AbandonAidantOnLeave(execution);
+                await RunOutTransitionAsync(execution);
+            }
         }
         else
         {
+            AbandonAidantOnLeave(execution);
             await RunOutTransitionAsync(execution);
         }
     }
+
+    /// <summary>
+    /// 离开节点时清场未办结协办行（issues/253，规范 04「动态协办」）：<c>waitCompletion=false</c>
+    /// （缺省）时主办可随时办结推进，未办结协办行随废弃腿清场、账本记废弃，不留孤儿待办。
+    /// 只在<b>真要离开本节点</b>（merged／普通档放行出边）时调用——串行会签/加签续建/征询未收齐
+    /// 那些「留在本节点」的分支不调，否则会把还在办的协办行提前废弃。幂等：已废弃行不再命中，
+    /// 会签档 <see cref="CountersignHandler"/> 先清过一遍也不会重复记账。
+    /// </summary>
+    private void AbandonAidantOnLeave(Execution execution) =>
+        AidantSupport.AbandonPendingOnNode(execution.ProcessInstance, Name,
+            execution.Operator, execution.Context.ClockOrDefault);
 
     // ── 便捷字段（从 ext 中读取）──
 

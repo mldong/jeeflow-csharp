@@ -331,8 +331,11 @@ public class CountersignHandler : IHandler
     public Task HandleAsync(Execution execution)
     {
         var instance = execution.ProcessInstance!;
+        // issues/253：会签合并判据**显式排除协办行（task_type=1）**——按同节点同名行全算
+        // 会把协办行误当表决票挡住合并（规范 04「不计入会签合并计数」）。协办行不驱动流程、
+        // 无表决语义，票齐即推进；它的清场由 AbandonRemainingCountersignTasks 里的协办腿负责。
         var allTasks = instance.Tasks
-            .Where(t => _taskModel.Name == t.TaskName)
+            .Where(t => _taskModel.Name == t.TaskName && !AidantSupport.IsAidantRow(t))
             .ToList();
         var finishedCount = allTasks.Count(t => t.TaskState == (int)WfTaskState.Finished);
 
@@ -412,9 +415,12 @@ public class CountersignHandler : IHandler
     private static bool IsOneVoteVeto(string? condition) =>
         condition != null && FlowConst.OneVoteVeto.Equals(condition.Trim(), StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>废弃本节点剩余 DOING 会签任务（刚完成的任务此刻已 FINISHED，不误伤）。</summary>
+    /// <summary>废弃本节点剩余 DOING 会签任务（刚完成的任务此刻已 FINISHED，不误伤）。
+    /// issues/253：协办行先走自己的清场腿（废弃＋往主办行账本记废弃），再清剩余会签行——
+    /// 顺序不能反，先被下面循环置 99 的协办行就记不上账了（＝java CountersignHandler 同一把尺子）。</summary>
     private void AbandonRemainingCountersignTasks(ProcessInstance instance, string? op, IClock clock)
     {
+        AidantSupport.AbandonPendingOnNode(instance, _taskModel.Name, op, clock);
         foreach (var task in instance.Tasks)
         {
             if (_taskModel.Name == task.TaskName && task.IsDoing())

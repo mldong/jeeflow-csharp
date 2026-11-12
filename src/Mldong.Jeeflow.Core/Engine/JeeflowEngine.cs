@@ -93,6 +93,10 @@ public class JeeflowEngine
         {
             // 「退回修改、重提直返」：申请待办带直返上下文 ⇒ 走直返腿（只接受 submitType=5）
             var snapshot = await Repository.FindTaskByIdAsync(taskId);
+            // issues/253 推进闸：协办行（task_type=1）办结不产生执行对象、不跑输出变迁
+            // （＝java executeProcessTask 入口那一刀，排在重提直返分流之前）。
+            if (snapshot != null && snapshot.IsDoing() && AidantSupport.IsAidantRow(snapshot))
+                return await CompleteAidantWithoutDriveAsync(taskId, op, args);
             if (snapshot != null && snapshot.IsDoing() && ReapplySupport.ReapplyOf(snapshot) != null)
                 return await ExecuteReapplyAsync(snapshot, op, args);
             var exec = await PrepareExecutionAsync(taskId, op, args);
@@ -119,6 +123,10 @@ public class JeeflowEngine
             // 带直返标记的申请待办只能按 submitType=5 重提：命名跳转与血缘回退（nodeName 空）
             // 两档都不得绕过（java `executeAndJumpTask` 同款守卫，覆盖整个入口而非只有命名支）。
             var snapshot = await Repository.FindTaskByIdAsync(taskId);
+            // issues/253 推进闸：两路同闸（照 snaker，别只堵 executeTask 一路）——协办行跳转/退回
+            // 同样不驱动流程，且必须排在血缘/目标守卫与重提直返守卫之前，免得协办行被守卫的文案误拦。
+            if (snapshot != null && snapshot.IsDoing() && AidantSupport.IsAidantRow(snapshot))
+                return await CompleteAidantWithoutDriveAsync(taskId, op, args);
             ReapplySupport.RejectMarkedApplicant(snapshot, "跳转");
             if (string.IsNullOrEmpty(nodeName))
             {
@@ -134,6 +142,10 @@ public class JeeflowEngine
             var exec = await PrepareExecutionAsync(taskId, op, args);
             if (exec == null) return new List<ProcessTask>();
             var model = exec.ProcessModel!;
+            // issues/253：跳转/退回离开本节点 ⇒ 未办结协办行随废弃腿清场（账本记废弃）。
+            // ＝java executeAndJumpTask 里 prepareExecution 之后那一刀，命名/血缘两档同清。
+            AidantSupport.AbandonPendingOnNode(exec.ProcessInstance,
+                exec.ProcessTask?.TaskName, op, _context.ClockOrDefault);
             if (string.IsNullOrEmpty(nodeName))
             {
                 // issues/121 P2：ROLLBACK 走血缘版——按当前行的 ParentTaskId 从仓储取出历史行，
@@ -172,10 +184,18 @@ public class JeeflowEngine
         return await RunInTxAsync(async () =>
         {
             // 带直返标记的申请待办不得被"拒绝"直接推到结束（java `executeAndJumpToEnd` 同款守卫）
-            ReapplySupport.RejectMarkedApplicant(await Repository.FindTaskByIdAsync(taskId), "拒绝");
+            var snapshot = await Repository.FindTaskByIdAsync(taskId);
+            // issues/253 推进闸：协办行拒绝同样不驱动流程（任何 submitType 都只办结自己那一行）
+            if (snapshot != null && snapshot.IsDoing() && AidantSupport.IsAidantRow(snapshot))
+                return await CompleteAidantWithoutDriveAsync(taskId, op, args);
+            ReapplySupport.RejectMarkedApplicant(snapshot, "拒绝");
             var exec = await PrepareExecutionAsync(taskId, op, args);
             if (exec == null) return new List<ProcessTask>();
             var model = exec.ProcessModel!;
+            // issues/253：离开节点先清场未办结协办行（废弃＋账本记废弃），再走后加签/征询的既有废弃腿
+            // （＝java executeAndJumpToEnd 的位序；账本必须赶在结束节点废弃全部 DOING 之前记）。
+            AidantSupport.AbandonPendingOnNode(exec.ProcessInstance,
+                exec.ProcessTask?.TaskName, op, _context.ClockOrDefault);
             // 拒绝结束：本节点未完成的加签任务一并废弃，不留孤儿待办（规范 04 · 后加签「语义边界」）
             AddSignSupport.AbandonDoingOnNode(model, exec.ProcessInstance,
                 exec.ProcessTask?.TaskName, op, _context.ClockOrDefault);
@@ -206,6 +226,9 @@ public class JeeflowEngine
             // 校验放在任何状态变更之前：来源节点配了 RETURN_TO_SOURCE 时，先读模型判准入
             // （非法配置/不支持的形状不得先完成任务、先发通知）。
             var snapshot = await Repository.FindTaskByIdAsync(taskId);
+            // issues/253 推进闸：协办行退回发起人同样不驱动流程（排在重提直返守卫之前）
+            if (snapshot != null && snapshot.IsDoing() && AidantSupport.IsAidantRow(snapshot))
+                return await CompleteAidantWithoutDriveAsync(taskId, op, args);
             // 带直返标记的申请待办不得被"再次退回"重建一条无标记申请（那会丢掉本轮分支等待）
             ReapplySupport.RejectMarkedApplicant(snapshot, "再次退回");
             TaskModel? sourceNode = null;
@@ -229,6 +252,9 @@ public class JeeflowEngine
             var exec = await PrepareExecutionAsync(taskId, op, args);
             if (exec == null) return new List<ProcessTask>();
             var model = exec.ProcessModel!;
+            // issues/253：退回发起人离开本节点 ⇒ 未办结协办行随废弃腿清场（账本记废弃）
+            AidantSupport.AbandonPendingOnNode(exec.ProcessInstance,
+                exec.ProcessTask?.TaskName, op, _context.ClockOrDefault);
             // 退回发起人：本节点未完成的加签任务一并废弃，不留孤儿待办（规范 04 · 后加签「语义边界」）
             AddSignSupport.AbandonDoingOnNode(model, exec.ProcessInstance,
                 exec.ProcessTask?.TaskName, op, _context.ClockOrDefault);
@@ -414,6 +440,124 @@ public class JeeflowEngine
         });
     }
 
+    // ═══ 动态协办（issues/253）═══
+
+    /// <summary>
+    /// 动态协办（规范 04 · 动态协办／规范 06 §<c>processTask/aidant</c>）：主办把「这活」交给别人干——
+    /// 按人派生 <c>task_type=1</c> 协办子行，<b>主办行原样保留 DOING</b>，节点推进仍由主办行办结触发。
+    /// 对齐 Java <c>JeeflowEngineImpl.aidantTask</c>。
+    ///
+    /// <para><b>判据全部排在任何状态变更之前</b>（报错即零写入，与后加签/征询/撤回同一规矩），位序逐字照 java：
+    /// 任务存在 → 禁递归（协办行不能再派生）→ 主办行 DOING → actorIds 归一后非空 → 名册鉴权（auto/admin 例外，
+    /// 以参与者表为判据）→ 实例存在 → 定义存在 → 节点是任务节点 → 逐人去重（该人已有本主办行下未办结协办行）。</para>
+    ///
+    /// <para>落库序照 java：协办行逐行 saveTask（委托并入 → 分配 id → 全量写参与者 → fire 码 3）→
+    /// 主办行盖 wait 开关＋账本＋审计列后 updateTask。建单形状照征询成员行腿（同节点同名、parent＝主办行、
+    /// expire_time 同尺重算），另落 <c>task_type=1</c>／<c>performType=NORMAL</c>——节点上配的 performType
+    /// 可能是会签，协办行一律普通参与（规范 04 派生规则 1）。<b>不新增事件码、不新增 submitType 档</b>。</para>
+    ///
+    /// <para>⚠️ 严禁覆写任务 actor_id/operator 列（转办那条 ⚠️ 同尺）：进行中任务该列恒无值是家族不变量，
+    /// 派生协办不改主办行的办理人归属，审计由 update_user＋账本 operator 承载。</para>
+    /// </summary>
+    public Task<List<ProcessTask>> AidantTaskAsync(long taskId, List<string> actorIds,
+        string? reason, bool waitCompletion, string? op) =>
+        RunInGateAsync(() => RunInInstanceLockAsync(taskId,
+            () => AidantTaskInTxAsync(taskId, actorIds, reason, waitCompletion, op)));
+
+    private async Task<List<ProcessTask>> AidantTaskInTxAsync(long taskId, List<string> actorIds,
+        string? reason, bool waitCompletion, string? op)
+    {
+        return await RunInTxAsync(async () =>
+        {
+            var host = await Repository.FindTaskByIdAsync(taskId);
+            if (host == null)
+                throw new JeeflowException(AidantSupport.MsgTaskNotFound);
+            // 禁递归：协办行携带派生参数 ⇒ 报错（规范 04 派生规则 4）
+            if (AidantSupport.IsAidantRow(host))
+                throw new JeeflowException(AidantSupport.MsgNoRecursion);
+            if (!host.IsDoing())
+                throw new JeeflowException(AidantSupport.MsgNotDoing);
+            var actors = PageQuery.NormalizeActors(actorIds);
+            if (actors.Count == 0)
+                throw new JeeflowException(AidantSupport.MsgNoActors);
+            // 以参与者表为判据（聚合副本可能滞后于加签/转办的增量写入，与 transfer 同源）
+            if (!IsPrivileged(op))
+            {
+                var roster = await Repository.FindTaskActorsAsync(taskId);
+                if (!roster.Contains(op!))
+                    throw new JeeflowException(AidantSupport.MsgNoPermission);
+            }
+            var instance = await Repository.FindInstanceByIdAsync(host.ProcessInstanceId);
+            if (instance == null)
+                throw new JeeflowException("流程实例不存在");
+            // issues/249 同一课：账本必须盖在聚合内的同一对象上——FindTaskByIdAsync 在 SQL 仓是独立副本，
+            // 后续 updateInstance 的级联会拿聚合里没账本的旧副本抹掉它。这里把 host 重指到聚合内那份。
+            foreach (var t in instance.Tasks)
+            {
+                if (t.TaskId == taskId) { host = t; break; }
+            }
+            var define = await Repository.FindDefineByIdAsync(instance.DefineId);
+            if (define == null)
+                throw new JeeflowException("流程定义不存在");
+            var model = ModelParser.Parse(define.Content, _context);
+            if (model.GetNode(host.TaskName) is not TaskModel node)
+                throw new JeeflowException(AidantSupport.MsgNotDoing);
+            // 去重：该人已有本主办行下**未办结**协办行 ⇒ 报错（规范 04 派生规则 5）
+            var existing = AidantSupport.AidantRows(instance.Tasks, host);
+            foreach (var actor in actors)
+                foreach (var t in existing)
+                    if (t.IsDoing() && t.ActorIds.Contains(actor))
+                        throw new JeeflowException(AidantSupport.MsgDuplicate);
+
+            // ── 判据全过，以下才允许写 ──
+            var round = AidantSupport.LastRound(host) + 1;
+            var firstTaskNode = FlowUtil.IsFirstTaskName(model, node.Name);
+            var exec = BuildExecution(model, instance, instance.Variables, op);
+            var created = new List<ProcessTask>();
+            foreach (var actor in actors)
+            {
+                // 建单不变量：parent＝主办行 id（协办行的身份锚——等待闸判据、detail 投影、去重全靠它）
+                var child = instance.CreateTask(node, node.DisplayName,
+                    new List<string> { actor }, op, host.TaskId, firstTaskNode, _context.ClockOrDefault);
+                child.TaskType = WfTaskType.Secondary;
+                child.PerformType = WfPerformType.Normal;
+                if (!string.IsNullOrEmpty(reason))
+                    child.Variables[FlowConst.AidantReason] = reason;
+                // 分支归属与每一次普通建单同一条腿（照征询成员行）：并行范围内的协办行继承父任务归属
+                ReapplySupport.PutScopes(child, ReapplySupport.BuildScopes(
+                    host, model, node.Name, child.TaskId));
+                await ApplySurrogateAsync(exec, child);
+                await Repository.SaveTaskAsync(child);
+                if (ReapplySupport.FillRootSelf(child))
+                    await Repository.UpdateTaskAsync(child);
+                await NotifyTaskStartAsync(child);
+                created.Add(child);
+            }
+            // 等待闸开关＋账本落主办行（主办不办结，variables 合并序保证账本活到办结后）
+            host.Variables[FlowConst.AidantWait] = waitCompletion;
+            AidantSupport.AppendAidantHistory(host, op, actors, round, reason, _context.ClockOrDefault);
+            host.UpdateUser = op;
+            host.UpdateTime = _context.ClockOrDefault.Now;
+            await Repository.UpdateTaskAsync(host);
+            return created;
+        });
+    }
+
+    /// <summary>
+    /// 协办行办结的<b>推进闸</b>（issues/253，规范 04「推进闸与等待闸」；参照 snaker
+    /// <c>SnakerEngineImpl.execute</c> 的「协办任务完成不产生执行对象」）：只完成任务行
+    /// （<see cref="PrepareExecutionAsync"/> 内含 CompleteTask／UpdateTask／fire 码 5/6），
+    /// <b>不跑 node.ExecuteAsync、不跑输出变迁</b>，返回空的新任务表。四条办理入口
+    /// （execute／jump／reject／rollbackToOperator）同闸——协办行任何 submitType 都不得驱动流程。
+    /// </summary>
+    private async Task<List<ProcessTask>> CompleteAidantWithoutDriveAsync(long taskId, string? op, FlowData args)
+    {
+        var exec = await PrepareExecutionAsync(taskId, op, args);
+        if (exec == null) return new List<ProcessTask>();
+        await PersistTasksAsync(exec);
+        return exec.ProcessTaskList;
+    }
+
     // ═══ 退回修改、重提直返 ═══
 
     /// <summary>来源节点配置了 RETURN_TO_SOURCE 时的准入校验（不改任何状态）。</summary>
@@ -591,6 +735,12 @@ public class JeeflowEngine
         // 后加签写入口校验（规范 04 · 后加签）：必须排在 CompleteTask 之前——内存仓储无回滚，
         // 报错时不得留下已完成的任务行（"报错且无写入"是这条链的硬要求）。
         AddSignSupport.ValidateSubmission(model, task, args, op);
+
+        // issues/253 等待闸：waitCompletion=true 的主办行办结前判「不存在 DOING 协办行」，
+        // 未齐 ⇒ 逐字文案报错、零写入。同样必须排在 CompleteTask 之前（内存仓储无回滚）。
+        // 协办行自身不受本闸约束（它办结本来就不驱动流程）；缺省 false 原样放行。
+        // ＝java prepareExecution 里 AddSignSupport.validateSubmission 之后那一刀。
+        AidantSupport.GateWait(instance.Tasks, task);
 
         // 节点拦截器声明校验（issues/244 ①）：当前任务所属节点的 pre/post 两串（节点级空则回落流程级）
         // 里每个名字都必须在 NamedInterceptors 里可解析，解析不了抛执行期同一句。
