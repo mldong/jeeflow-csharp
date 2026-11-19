@@ -356,6 +356,7 @@ public class JeeflowEngine
             if (ReapplySupport.FillRootSelf(resurrected))
                 await Repository.UpdateTaskAsync(resurrected);
             await NotifyTaskStartAsync(resurrected);
+            await ScheduleTimeActionsAsync(node, resurrected, instance.Variables);
             // 写 3：原 FINISHED 行不改写，只盖 tf_recallHistory 追加账本（recalledTaskId 指向复活行）
             RecallSupport.AppendRecallHistory(target, op, resurrected.TaskId, _context.ClockOrDefault);
             // ⚠ 本栈两仓的 <c>UpdateInstanceAsync</c> 都会<b>按聚合副本级联覆写每一行任务</b>（v1.0.1），
@@ -434,6 +435,8 @@ public class JeeflowEngine
                 if (ReapplySupport.FillRootSelf(member))
                     await Repository.UpdateTaskAsync(member);
                 await NotifyTaskStartAsync(member);
+                // 征询成员行按规范不继承时限动作（spec 02 §4.5）
+                await ScheduleTimeActionsAsync(node, member, instance.Variables, allow: false);
                 created.Add(member);
             }
             return created;
@@ -531,6 +534,8 @@ public class JeeflowEngine
                 if (ReapplySupport.FillRootSelf(child))
                     await Repository.UpdateTaskAsync(child);
                 await NotifyTaskStartAsync(child);
+                // 协办行按规范不继承时限动作（spec 02 §4.5）
+                await ScheduleTimeActionsAsync(node, child, instance.Variables, allow: false);
                 created.Add(child);
             }
             // 等待闸开关＋账本落主办行（主办不办结，variables 合并序保证账本活到办结后）
@@ -715,6 +720,9 @@ public class JeeflowEngine
         // 引擎控制键（_branchCtx / _reapplyContext）只能由引擎写：客户端传进来的一律就地剥掉
         // （伪造"申请待办"标记或伪造分支归属都不得改变路由/血缘），对齐 Java prepareExecution。
         args = ReapplySupport.StripReserved(args);
+        // 实例级事务排他（spec 04 · 并发保护）：先锁再读，堵"读后锁前"的二次推进窗口
+        var pre = await Repository.FindTaskByIdAsync(taskId);
+        await LockInstanceAsync(pre?.ProcessInstanceId);
         var task = await Repository.FindTaskByIdAsync(taskId);
         if (task == null || !task.IsDoing())
             throw new JeeflowException(WfErr.NotFoundDoingProcessTask);
@@ -778,6 +786,13 @@ public class JeeflowEngine
             task.UpdateUser = completedInInstance.UpdateUser;
         }
         await Repository.UpdateTaskAsync(task);
+        // 时限动作联动（spec 04 · 写路径）：任务离开 DOING ⇒ 取消该任务 pending 提醒/自动行；
+        // 完成（TASK_COMPLETE 事实）且有 callback 配置 ⇒ 同事务插 CALLBACK 行。
+        await CancelTaskTimeActionsAsync(taskId);
+        var submitForCb = args != null && args.TryGetValue(FlowConst.SubmitType, out var stv)
+            ? Convert.ToInt32(stv) : (int?)null;
+        if (!(submitForCb != null && RejectSubmitTypes.Contains(submitForCb.Value)))
+            await InsertCallbackActionAsync(currentNode as TaskModel, task);
 
         // spec 11-events §11.3 码 5/6：任务被办掉/被退回，两支都在<b>任务行 state 落库之后</b> fire，
         // 且互斥（一次办理只发一支）——四条 execute 路径（execute/jump/jumpToEnd/rollbackToOperator）
@@ -813,6 +828,94 @@ public class JeeflowEngine
         };
     }
 
+    // ─── 任务时限动作（spec 04 · 零 schema）────────────────────────────────
+
+    private async Task LockInstanceAsync(long? instanceId)
+    {
+        if (instanceId == null) return;
+        if (Repository is IInstanceLockRepository locker)
+            await locker.LockInstanceAsync(instanceId.Value);
+    }
+
+    private async Task ScheduleTimeActionsAsync(TaskModel? node, ProcessTask task, FlowData vars, bool allow = true)
+    {
+        var sink = _context.TimeActionSink;
+        if (sink == null || !allow || node == null || task.TaskId == null) return;
+        if (task.TaskState != (int)WfTaskState.Doing) return;
+        if (task.TaskType == WfTaskType.Secondary) return;
+        if (TimeLimitSupport.AutoExecuteEnabled(node))
+        {
+            if (task.ExpireTime == null)
+            {
+                Console.Error.WriteLine($"[jeeflow] 时限配置诊断 task={task.TaskId} node={node.Name} autoExecute=Y 但无有效到期时间");
+            }
+            else
+            {
+                await sink.InsertTimeActionAsync(new TimeAction
+                {
+                    Type = TimeAction.TypeAutoComplete,
+                    DueAt = TimeLimitSupport.EpochMilli(task.ExpireTime.Value),
+                    InstanceId = task.ProcessInstanceId ?? 0,
+                    TaskId = task.TaskId.Value,
+                    NodeKey = node.Name ?? "",
+                    OccurrenceNo = 0,
+                    IdempotencyKey = $"wf:auto:{task.TaskId}:0",
+                });
+            }
+        }
+        var expr = node.ReminderTime;
+        if (!string.IsNullOrWhiteSpace(expr))
+        {
+            var due = TimeLimitSupport.FirstReminder(expr, vars, task.CreateTime ?? _context.ClockOrDefault.Now);
+            if (due == null)
+            {
+                Console.Error.WriteLine($"[jeeflow] 时限配置诊断 task={task.TaskId} node={node.Name} reminderTime={expr} 解析不出");
+            }
+            else
+            {
+                await sink.InsertTimeActionAsync(new TimeAction
+                {
+                    Type = TimeAction.TypeRemind,
+                    DueAt = TimeLimitSupport.EpochMilli(due.Value),
+                    InstanceId = task.ProcessInstanceId ?? 0,
+                    TaskId = task.TaskId.Value,
+                    NodeKey = node.Name ?? "",
+                    OccurrenceNo = 1,
+                    IdempotencyKey = $"wf:remind:{task.TaskId}:1",
+                });
+            }
+        }
+    }
+
+    private async Task InsertCallbackActionAsync(TaskModel? node, ProcessTask task)
+    {
+        var sink = _context.TimeActionSink;
+        if (sink == null || node == null || task.TaskId == null) return;
+        if (TimeLimitSupport.CallbackName(node).Length == 0) return;
+        await sink.InsertTimeActionAsync(new TimeAction
+        {
+            Type = TimeAction.TypeCallback,
+            DueAt = TimeLimitSupport.EpochMilli(_context.ClockOrDefault.Now),
+            InstanceId = task.ProcessInstanceId ?? 0,
+            TaskId = task.TaskId.Value,
+            NodeKey = node.Name ?? "",
+            OccurrenceNo = 0,
+            IdempotencyKey = $"wf:callback:{task.TaskId}:0",
+        });
+    }
+
+    private async Task CancelTaskTimeActionsAsync(long? taskId)
+    {
+        var sink = _context.TimeActionSink;
+        if (sink != null && taskId != null) await sink.CancelTaskTimeActionsAsync(taskId.Value);
+    }
+
+    private async Task CancelInstanceTimeActionsAsync(long? instanceId)
+    {
+        var sink = _context.TimeActionSink;
+        if (sink != null && instanceId != null) await sink.CancelInstanceTimeActionsAsync(instanceId.Value);
+    }
+
     private async Task PersistTasksAsync(Execution exec)
     {
         foreach (var task in exec.ProcessTaskList)
@@ -826,6 +929,10 @@ public class JeeflowEngine
                 await Repository.UpdateTaskAsync(task);
             // TASK_START 在落库（分配 taskId）后 fire（spec §4.4 / issues/13）
             await NotifyTaskStartAsync(task);
+            // 时限动作建行（spec 04 · 写路径）：节点四键 → 动作行，与任务同事务
+            await ScheduleTimeActionsAsync(
+                exec.ProcessModel?.GetNode(task.TaskName) as TaskModel, task,
+                exec.ProcessInstance!.Variables);
         }
         // 记录类（custom）历史行的 INSERT 腿（issues/142 · spec 02 §6.2 第 1 条）——
         // **只 saveTask，不 notifyTaskStart**：码 3 表达"新待办产生"，而这一行出生即 FINISHED(20)
@@ -894,6 +1001,8 @@ public class JeeflowEngine
                 // 父实例（或更上层）被这一支流转连带办结：它的行不在本次 updateInstance 范围内，补写
                 await Repository.UpdateInstanceAsync(instance!);
             }
+            // 实例终态 ⇒ 取消该实例 pending 提醒/自动行（CALLBACK 表示既成事实，不取消）
+            await CancelInstanceTimeActionsAsync(end.InstanceId);
             await ProcessPublisher.NotifyInstanceEndAsync(
                 end.InstanceId, end.State, _context.EventListeners);
         }

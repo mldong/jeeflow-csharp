@@ -11,7 +11,7 @@ namespace Mldong.Jeeflow.Repository.MySql;
 /// ——同事务内所有仓储方法共用同一连接（spec/05）。
 /// NULL 读侧显式 DBNull 处理（T10/C21）；LIMIT/OFFSET 内联非负整数（C21）。
 /// </summary>
-public class MySqlRepository : IProcessRepository
+public class MySqlRepository : IProcessRepository, IInstanceLockRepository
 {
     private readonly MySqlConnectionFactory _factory;
     private ServiceContext? _ctx;
@@ -271,6 +271,17 @@ public class MySqlRepository : IProcessRepository
         await rs.DisposeAsync();
         task.ActorIds = await FindTaskActorsInternalAsync(lease.Conn, taskId.Value);
         return task;
+    }
+
+    /// <summary>实例级事务排他（spec 04 · 并发保护）：实例行 SELECT … FOR UPDATE，
+    /// 锁随最外层事务提交/回滚释放；行不存在不新造失败面。</summary>
+    public async Task LockInstanceAsync(long instanceId)
+    {
+        await using var lease = await RentAsync();
+        const string sql = "SELECT id FROM wf_process_instance WHERE id = ? FOR UPDATE";
+        await using var cmd = NewCmd(sql, lease.Conn);
+        cmd.Parameters.Add(new MySqlParameter { Value = instanceId });
+        await cmd.ExecuteScalarAsync();
     }
 
     public virtual async Task SaveTaskAsync(ProcessTask task)

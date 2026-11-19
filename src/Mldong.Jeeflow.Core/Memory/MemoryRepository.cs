@@ -8,8 +8,11 @@ namespace Mldong.Jeeflow.Core;
 /// 行为语义逐条对齐 jeeflow-repository-jdbc（分页五键/白名单过滤/TsID 混排/级联更新/参与者全量覆盖），
 /// 保证 M2 内存/MySQL 行为双跑无分叉。
 /// </summary>
-public class MemoryRepository : IProcessRepository
+public class MemoryRepository : IProcessRepository, IInstanceLockRepository
 {
+    /// <summary>非数据库仓储的等价单进程互斥由引擎实例锁承担（spec 04），此处 no-op。</summary>
+    public Task LockInstanceAsync(long instanceId) => Task.CompletedTask;
+
     private ServiceContext? Context { get; set; }
     protected IClock Clock => Context?.ClockOrDefault ?? SystemClock.Instance;
     protected IIdGenerator IdGen => Context?.IdGeneratorOrDefault ?? new AtomicIdGenerator(0L, Clock);

@@ -34,6 +34,9 @@ public sealed class ServiceContext
     /// <summary>时钟；未注入 SystemClock，测试注 FixedClock。</summary>
     public IClock? Clock { get; set; }
 
+    /// <summary>时限动作凭证（spec 04）；未注入＝全部时限动作静默跳过。</summary>
+    public ITimeActionSink? TimeActionSink { get; set; }
+
     /// <summary>业务数据读取器（bizData action，按名 "metaTableReader" 查找，issues/23/28）。</summary>
     public object? BizDataReader { get; set; }
 
