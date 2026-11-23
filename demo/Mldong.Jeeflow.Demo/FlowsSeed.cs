@@ -153,6 +153,11 @@ public static class FlowsSeed
                 new BuiltinAssignmentHandlers.ApplicantDeptMainLeaderAssignmentHandler());
             ctx.RegisterAssignmentHandler("com.mldong.jeeflow.interceptor.impl.TaskRoleAssigneeHandler",
                 new BuiltinAssignmentHandlers.TaskRoleAssigneeHandler());
+            // 两个「表单指定用户」类：注册名用顶级类 FQN，与 Metadata 及其余七语言逐字一致
+            ctx.RegisterAssignmentHandler("com.mldong.jeeflow.interceptor.impl.FormUserDeptLeaderAssignmentHandler",
+                new BuiltinAssignmentHandlers.FormUserDeptLeaderAssignmentHandler());
+            ctx.RegisterAssignmentHandler("com.mldong.jeeflow.interceptor.impl.FormUserDeptMainLeaderAssignmentHandler",
+                new BuiltinAssignmentHandlers.FormUserDeptMainLeaderAssignmentHandler());
         }
     }
 }

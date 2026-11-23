@@ -33,7 +33,7 @@ public static class TestInfra
         return ctx;
     }
 
-    /// <summary>注册 7 内置 assignmentHandler（键=Java FQCN，C29）+ custom 测试 handler。</summary>
+    /// <summary>注册内置 assignmentHandler（C29）+ custom 测试 handler。数量以 Metadata.BuiltIn 现读为准，不在注释里写死。</summary>
     public static void RegisterBuiltins(ServiceContext ctx)
     {
         ctx.RegisterAssignmentHandler(
@@ -57,6 +57,13 @@ public static class TestInfra
         ctx.RegisterAssignmentHandler(
             "com.mldong.jeeflow.interceptor.impl.TaskRoleAssigneeHandler",
             new BuiltinAssignmentHandlers.TaskRoleAssigneeHandler());
+        // 两个「表单指定用户」类：注册名用顶级类 FQN，与 Metadata 及其余七语言逐字一致
+        ctx.RegisterAssignmentHandler(
+            "com.mldong.jeeflow.interceptor.impl.FormUserDeptLeaderAssignmentHandler",
+            new BuiltinAssignmentHandlers.FormUserDeptLeaderAssignmentHandler());
+        ctx.RegisterAssignmentHandler(
+            "com.mldong.jeeflow.interceptor.impl.FormUserDeptMainLeaderAssignmentHandler",
+            new BuiltinAssignmentHandlers.FormUserDeptMainLeaderAssignmentHandler());
         // custom 节点 handler（等价 Java 测试 classpath：flows/08-custom-node 声明的 clazz）
         ctx.CustomHandlers["com.mldong.jeeflow.test.TestCustomHandler"] = new TestCustomHandler();
     }

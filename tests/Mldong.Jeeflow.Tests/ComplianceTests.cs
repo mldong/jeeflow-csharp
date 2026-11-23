@@ -562,7 +562,7 @@ public class ComplianceTests
         var registry = new HandlerRegistry();
         var builtinCount = registry.ListHandlerTypes().Sum(
             t => registry.ListHandlers(t).Count);
-        Assert.Equal(8, builtinCount); // 7 assignmentHandler + 1 权限码默认映射
+        Assert.Equal(10, builtinCount); // 9 assignmentHandler（issues/16 那 7 条 ＋ 表单指定用户两条）+ 1 权限码默认映射
         registry.Register("AssignmentHandler", "custom.handler.X", "自定义", 1, "test");
         registry.Register("AssignmentHandler", "custom.handler.Y", "自定义2", 2, "test");
         var byType = registry.ListHandlers("AssignmentHandler");

@@ -1,0 +1,211 @@
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using Mldong.Jeeflow.Core;
+using Xunit;
+
+namespace Mldong.Jeeflow.Tests;
+
+/// <summary>
+/// 「表单指定用户所属部门经理／分管领导」两个内置处理器（C# 栈）。
+///
+/// <para>契约＝执行卡 <c>docs/2026-11-22-form-user-assignment-handler-handoff.md</c> §3（八语言同形）；
+/// 行为基准＝jeeflow-go <c>v1.8.67</c>（本轮样章）；场景来源＝mldong-fastapi-wf <c>fe9233d</c>（HR 代员工提交）。</para>
+///
+/// <para>⚠️ 本栈的 assignmentHandler 腿历史上零覆盖：<c>TestInfra</c> 注册了七具 handler 却没有任何用例
+/// 通过流程定义里的 <c>assignmentHandler</c> 走进去（共享 <c>flows/11-assignment-handler.json</c> 在本仓
+/// 测试里零引用）⇒ 注册名或取人顺序写错不会有任何一格变红。本件既钉取值语义，也钉
+/// "引擎从 <see cref="ServiceContext"/> 真把处理器取到"这条接线。</para>
+/// </summary>
+public class FormUserAssignmentHandlerTests
+{
+    private const string FqLeader = "com.mldong.jeeflow.interceptor.impl.FormUserDeptLeaderAssignmentHandler";
+    private const string FqMain = "com.mldong.jeeflow.interceptor.impl.FormUserDeptMainLeaderAssignmentHandler";
+    private const string FqFormField = "com.mldong.jeeflow.interceptor.impl.FormFieldAssigneeHandler";
+
+    /// <summary>dept1 有两位经理＋一位分管领导，其余部门无领导。</summary>
+    private class OrgProv : IOrgUserProvider
+    {
+        public Task<List<string>> FindDeptLeadersAsync(string deptId) =>
+            Task.FromResult(deptId == "dept1" ? new List<string> { "leader1", "leader2" } : new List<string>());
+        public Task<List<string>> FindDeptMainLeadersAsync(string deptId) =>
+            Task.FromResult(deptId == "dept1" ? new List<string> { "boss1" } : new List<string>());
+        public Task<List<string>> FindByRoleAsync(string roleCode) => Task.FromResult(new List<string>());
+    }
+
+    private static (JeeflowEngine Engine, MemoryRepository Repo, ServiceContext Ctx) Harness()
+    {
+        var (engine, repo, ctx) = TestInfra.NewEngineWithCtx();
+        ctx.OrgUserProvider = new OrgProv();
+        return (engine, repo, ctx);
+    }
+
+    private static string FlowJson(string name, string applyAssignee)
+    {
+        string Task(string id, string handler, int y) =>
+            "{\"id\":\"" + id + "\",\"type\":\"snaker:task\",\"x\":480,\"y\":" + y +
+            ",\"text\":{\"value\":\"" + id + "\"},\"properties\":{\"width\":120,\"height\":80," +
+            "\"assignee\":\"\",\"taskType\":\"Major\",\"performType\":\"ANY\",\"autoExecute\":\"N\"," +
+            "\"assignmentHandler\":\"" + handler + "\"}}";
+        return "{\"nodes\":[" +
+               "{\"id\":\"start\",\"type\":\"snaker:start\",\"x\":480,\"y\":200,\"text\":{\"value\":\"开始\"},\"properties\":{}}," +
+               "{\"id\":\"apply\",\"type\":\"snaker:task\",\"x\":480,\"y\":350,\"text\":{\"value\":\"发起申请\"}," +
+               "\"properties\":{\"assignee\":\"" + applyAssignee + "\",\"taskType\":\"Major\",\"performType\":\"ANY\",\"autoExecute\":\"N\"}}," +
+               Task("manager#f_userId", FqLeader, 500) + "," +
+               Task("mainLeader#f_userId", FqMain, 650) + "," +
+               "{\"id\":\"end\",\"type\":\"snaker:end\",\"x\":480,\"y\":800,\"text\":{\"value\":\"结束\"},\"properties\":{}}]," +
+               "\"edges\":[" +
+               "{\"id\":\"e0\",\"type\":\"snaker:transition\",\"sourceNodeId\":\"start\",\"targetNodeId\":\"apply\",\"properties\":{}}," +
+               "{\"id\":\"e1\",\"type\":\"snaker:transition\",\"sourceNodeId\":\"apply\",\"targetNodeId\":\"manager#f_userId\",\"properties\":{}}," +
+               "{\"id\":\"e2\",\"type\":\"snaker:transition\",\"sourceNodeId\":\"manager#f_userId\",\"targetNodeId\":\"mainLeader#f_userId\",\"properties\":{}}," +
+               "{\"id\":\"e3\",\"type\":\"snaker:transition\",\"sourceNodeId\":\"mainLeader#f_userId\",\"targetNodeId\":\"end\",\"properties\":{}}" +
+               "],\"name\":\"" + name + "\",\"displayName\":\"HR代员工提交（表单指定用户）\"}";
+    }
+
+    // ═══ 正向：四档并集（顺序即优先级）════════════════════════════════════════
+
+    [Theory]
+    [InlineData("f_ 主通道", "manager", "f_manager", "emp")]
+    [InlineData("裸名回落", "manager", "manager", "emp")]
+    [InlineData("# 右半（字段名本身带 f_）", "manager#f_userId", "f_userId", "emp")]
+    [InlineData("# 右半的 f_ 变体", "manager#userId", "f_userId", "emp")]
+    [InlineData("_NN 去后缀的 f_ 形", "manager_01", "f_manager", "emp")]
+    [InlineData("_NN 去后缀的裸名形", "manager_01", "manager", "emp")]
+    public void FieldLookupFourTiers(string label, string nodeKey, string varKey, string want)
+    {
+        var args = new FlowData().Set(varKey, want);
+        var got = BuiltinAssignmentHandlers.FindFormUserFieldValue(args, nodeKey);
+        Assert.True(Equals(want, got), $"{label}：期望 {want}，实得 {got}");
+    }
+
+    [Fact]
+    public void FPrefixBeatsBareName()
+    {
+        var args = new FlowData().Set("f_x", "emp").Set("x", "other");
+        Assert.Equal("emp", BuiltinAssignmentHandlers.FindFormUserFieldValue(args, "x"));
+    }
+
+    [Fact]
+    public void HashTierPrefersBareFieldThenFPrefix()
+    {
+        var args = new FlowData().Set("userId", "emp").Set("f_userId", "other");
+        Assert.Equal("emp", BuiltinAssignmentHandlers.FindFormUserFieldValue(args, "manager#userId"));
+    }
+
+    [Fact]
+    public void NumberSuffixTierPrefersFPrefix()
+    {
+        // jeeflow 变量存 f_ ⇒ 第 4 档先 f_ 再裸名（参照实现 fastapi-wf 没有这一支）
+        var args = new FlowData().Set("f_manager", "emp").Set("manager", "other");
+        Assert.Equal("emp", BuiltinAssignmentHandlers.FindFormUserFieldValue(args, "manager_01"));
+    }
+
+    [Fact]
+    public void TakesFirstNonEmptyIdOnly()
+    {
+        Assert.Equal("a", BuiltinAssignmentHandlers.FirstFormUserId("a,b"));
+        Assert.Equal("b", BuiltinAssignmentHandlers.FirstFormUserId(new List<object?> { "", "b", "c" }));
+        Assert.Equal("d", BuiltinAssignmentHandlers.FirstFormUserId("  ,  ,d"));
+        Assert.Equal("0", BuiltinAssignmentHandlers.FirstFormUserId("0"));
+        Assert.Null(BuiltinAssignmentHandlers.FirstFormUserId(new List<object?> { "", "  " }));
+        Assert.Null(BuiltinAssignmentHandlers.FirstFormUserId(null));
+    }
+
+    // ═══ 引擎级：HR 代员工提交两段链路 ════════════════════════════════════════
+
+    [Fact]
+    public async Task HrProxyFlowLandsOnFormUserDeptLeaders()
+    {
+        var (engine, repo, _) = Harness();
+        // userA 属 dept1（TestInfra.NamedUsers）⇒ 取的是**表单指定用户**的部门，不是操作人 applicant 的
+        var defineId = await TestInfra.SaveFlowDefineAsync(repo, "fu-hr-proxy", FlowJson("fu-hr-proxy", "applicant"));
+        var instId = await TestInfra.StartAndApplyAsync(engine, repo, defineId,
+            new FlowData().Set("f_userId", "userA"));
+
+        var doing = await repo.FindDoingTasksAsync(instId, null);
+        var manager = Assert.Single(doing, t => t.TaskName == "manager#f_userId");
+        Assert.Equal(new List<string> { "leader1", "leader2" }, manager.ActorIds);
+
+        await engine.ExecuteProcessTaskAsync(manager.TaskId!.Value, "leader1", new FlowData());
+        doing = await repo.FindDoingTasksAsync(instId, null);
+        var main = Assert.Single(doing, t => t.TaskName == "mainLeader#f_userId");
+        Assert.Equal(new List<string> { "boss1" }, main.ActorIds);
+    }
+
+    [Fact]
+    public async Task EmptyActorsDoNotBreakInstance()
+    {
+        var (engine, repo, _) = Harness();
+        var defineId = await TestInfra.SaveFlowDefineAsync(repo, "fu-hr-empty", FlowJson("fu-hr-empty", "applicant"));
+        var instId = await TestInfra.StartAndApplyAsync(engine, repo, defineId, new FlowData());
+
+        var doing = await repo.FindDoingTasksAsync(instId, null);
+        var manager = Assert.Single(doing, t => t.TaskName == "manager#f_userId");
+        Assert.Empty(manager.ActorIds);                       // 零参与者仍建 DOING 行
+        var inst = await repo.FindInstanceByIdAsync(instId);
+        Assert.Equal(10, inst!.State);                        // 未被空参与者打断
+    }
+
+    [Theory]
+    [InlineData("指向无部门用户", "manager")]     // manager 属 dept2 ⇒ 该部门无领导
+    [InlineData("指向查无此人", "ghost")]          // TestUserProvider 回 DeptId=null
+    [InlineData("值为空串", "")]
+    [InlineData("值为纯空白", "   ")]
+    public async Task NegativeShapesGiveNoActors(string label, string userId)
+    {
+        var (engine, repo, _) = Harness();
+        var defineId = await TestInfra.SaveFlowDefineAsync(repo, "fu-neg-" + label, FlowJson("fu-neg-" + label, "applicant"));
+        var instId = await TestInfra.StartAndApplyAsync(engine, repo, defineId,
+            new FlowData().Set("f_userId", userId));
+        var doing = await repo.FindDoingTasksAsync(instId, null);
+        var manager = Assert.Single(doing, t => t.TaskName == "manager#f_userId");
+        Assert.Empty(manager.ActorIds);
+    }
+
+    // ═══ 回归：现存 handler 没被并集查找渗进去 ════════════════════════════════
+
+    [Fact]
+    public async Task FormFieldAssigneeStillIgnoresHashTier()
+    {
+        // 同一枚节点唯一编码、同一份变量：老类读不到（它没有 # 档），新类读得到 ⇒ 两条腿各自独立
+        var (engine, repo, _) = Harness();
+        var defineId = await TestInfra.SaveFlowDefineAsync(repo, "fu-legacy", FlowJson("fu-legacy", "applicant"));
+        var legacyJson = FlowJson("fu-legacy2", "applicant")
+            .Replace("\"assignmentHandler\":\"" + FqLeader + "\"", "\"assignmentHandler\":\"" + FqFormField + "\"");
+        var legacyDefineId = await TestInfra.SaveFlowDefineAsync(repo, "fu-legacy2", legacyJson);
+
+        var emptyInst = await TestInfra.StartAndApplyAsync(engine, repo, legacyDefineId,
+            new FlowData().Set("f_userId", "userA"));
+        var doing = await repo.FindDoingTasksAsync(emptyInst, null);
+        var task = Assert.Single(doing, t => t.TaskName == "manager#f_userId");
+        Assert.Empty(task.ActorIds);
+
+        await TestInfra.StartAndApplyAsync(engine, repo, defineId, new FlowData().Set("f_userId", "userA"));
+    }
+
+    // ═══ 注册名／元数据 ═══════════════════════════════════════════════════════
+
+    [Fact]
+    public void MetadataExposesTwoNewDisplayNames()
+    {
+        var registry = new HandlerRegistry();
+        var metas = registry.ListHandlers("AssignmentHandler");
+        var tail = metas.Skip(metas.Count - 2).ToList();
+        Assert.Equal(FqLeader, tail[0].ClassName);
+        Assert.Equal("表单指定用户所属部门经理", tail[0].DisplayName);
+        Assert.Equal(70, tail[0].Order);
+        Assert.Equal(FqMain, tail[1].ClassName);
+        Assert.Equal("表单指定用户所属部门分管领导", tail[1].DisplayName);
+        Assert.Equal(80, tail[1].Order);
+    }
+
+    [Fact]
+    public void RegistrationNamesResolveToNewClasses()
+    {
+        var (_, _, ctx) = Harness();
+        Assert.IsType<BuiltinAssignmentHandlers.FormUserDeptLeaderAssignmentHandler>(
+            ctx.FindAssignmentHandler(FqLeader));
+        Assert.IsType<BuiltinAssignmentHandlers.FormUserDeptMainLeaderAssignmentHandler>(
+            ctx.FindAssignmentHandler(FqMain));
+    }
+}
