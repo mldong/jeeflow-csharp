@@ -183,6 +183,40 @@ public class FormUserAssignmentHandlerTests
         await TestInfra.StartAndApplyAsync(engine, repo, defineId, new FlowData().Set("f_userId", "userA"));
     }
 
+    /// <summary>
+    /// issues/255：老类第三档＝<c>_NN</c> 去后缀后查<strong>裸名 base</strong>（八语言补齐的那一档）。
+    /// 第三档只查裸名，<c>f_&lt;base&gt;</c> 是 254 两枚新类的扩面，老类不许跟着扩。
+    /// </summary>
+    [Fact]
+    public async Task FormFieldAssigneeNumberSuffixTier()
+    {
+        var handler = new BuiltinAssignmentHandlers.FormFieldAssigneeHandler();
+
+        async Task<string?> Assign(string nodeId, params (string Key, string Value)[] vars)
+        {
+            var args = new FlowData();
+            foreach (var (key, value) in vars) args[key] = value;
+            var exec = new Execution
+            {
+                Context = new ServiceContext(new MemoryRepository()),
+                NodeModel = new TaskModel { Name = nodeId },
+                Args = args,
+            };
+            return await handler.AssignAsync(exec);
+        }
+
+        Assert.Equal("userA,userB", await Assign("task_01", ("task", "userA,userB")));
+        // 惰性量词的最早可切点：a_b_01 的 base 是 a_b，不是 a
+        Assert.Equal("u_c", await Assign("a_b_01", ("a", "u_x"), ("a_b", "u_c")));
+        // 优先级：f_<id> → 裸名 → base 裸名
+        Assert.Equal("u_1", await Assign("task_01", ("f_task_01", "u_1"), ("task_01", "u_2"), ("task", "u_3")));
+        Assert.Equal("u_2", await Assign("task_01", ("task_01", "u_2"), ("task", "u_3")));
+        // 反向：尾巴非纯数字、base 为空、base 只有 f_ 形 ⇒ 三档全落空
+        Assert.Null(await Assign("task_01x", ("task", "u_3")));
+        Assert.Null(await Assign("_01", ("", "u_3")));
+        Assert.Null(await Assign("task_02", ("f_task", "u_3")));
+    }
+
     // ═══ 注册名／元数据 ═══════════════════════════════════════════════════════
 
     [Fact]
