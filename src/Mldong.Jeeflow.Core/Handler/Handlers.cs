@@ -58,15 +58,16 @@ public static class FlowUtil
     /// <summary>
     /// 能否退回到 parent —— 照 mldong-boot2 NodeModel.canRejected：自 current 的入边回溯，命中 parent 放行；
     /// 入边来源是 fork/join/start 时**跳过该条入边、不再深入**（boot2 是 continue，不是穿越），其余来源递归。
-    /// subprocess 在 boot2 里被注释掉，等同普通节点。
+    /// issues/257：目标父节点为会签（performType != Normal）时不可退。
     /// </summary>
     public static bool CanRejected(NodeModel current, NodeModel parent)
     {
+        if (parent is TaskModel taskParent && taskParent.PerformType != WfPerformType.Normal) return false;
         foreach (var tm in current.Inputs)
         {
             var source = tm.Source;
             if (ReferenceEquals(source, parent)) return true;
-            if (source is ForkModel or JoinModel or StartModel) continue;
+            if (source is ForkModel or JoinModel or SubProcessModel or StartModel) continue;
             if (source != null && CanRejected(source, parent)) return true;
         }
         return false;

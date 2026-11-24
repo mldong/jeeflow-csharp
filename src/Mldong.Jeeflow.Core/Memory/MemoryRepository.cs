@@ -66,6 +66,15 @@ public class MemoryRepository : IProcessRepository, IInstanceLockRepository
         return Task.FromResult(d != null ? CloneDefine(d) : null);
     }
 
+    public virtual Task<ProcessDefine?> FindDefineByNameAndVersionAsync(string? processName, int? version)
+    {
+        if (string.IsNullOrWhiteSpace(processName)) return Task.FromResult<ProcessDefine?>(null);
+        var matches = Defines.Values.Where(d => string.Equals(d.Name, processName, StringComparison.Ordinal));
+        if (version.HasValue) matches = matches.Where(d => d.Version == version);
+        var selected = matches.OrderByDescending(d => d.Version ?? 0).ThenByDescending(d => d.Id ?? 0).FirstOrDefault();
+        return Task.FromResult(selected != null ? CloneDefine(selected) : null);
+    }
+
     public virtual Task SaveDefineAsync(ProcessDefine define)
     {
         if (define.Id == null) define.Id = NextId();

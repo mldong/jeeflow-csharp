@@ -11,6 +11,25 @@ public interface IProcessRepository
 
     Task<ProcessDefine?> FindDefineByIdAsync(long? defineId);
 
+    /// <summary>
+    /// 子流程按定义名与版本定位（issues/257）：name 精确匹配；version 为 null 时按
+    /// version DESC、id DESC 取最新，显式版本精确匹配。与顶层按 id 启动一致，不额外过滤 state。
+    /// 默认实现用定义分页查询实现，已有仓储无需改动；仓储可按数据库查询覆写。
+    /// </summary>
+    async Task<ProcessDefine?> FindDefineByNameAndVersionAsync(string? processName, int? version)
+    {
+        if (string.IsNullOrWhiteSpace(processName)) return null;
+        var query = new PageQuery(1, 1)
+            {
+            OrderBy = version.HasValue ? "id DESC" : "version DESC,id DESC",
+            };
+        query.Add("t.name", "EQ", processName);
+        if (version.HasValue) query.Add("t.version", "EQ", version.Value);
+        var page = await PageDefinesAsync(query);
+        var id = page.Rows.Count == 0 ? null : page.Rows[0].Id;
+        return id == null ? null : await FindDefineByIdAsync(id);
+    }
+
     /// <summary>新增流程定义（id 为空时由实现生成）。</summary>
     Task SaveDefineAsync(ProcessDefine define);
     /// <summary>更新流程定义（name/displayName/type/state/content/version 等）。</summary>

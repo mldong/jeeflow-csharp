@@ -198,6 +198,10 @@ public class InstanceEndTiming132Tests
 
         var parent = await engine.StartProcessInstanceByIdAsync(parentDid, "user1", new FlowData());
         var parentId = parent.InstanceId!.Value;
+        var parentApprovalId = await DoingTaskIdAsync(repo, parentId);
+        var parentApproval = await repo.FindTaskByIdAsync(parentApprovalId);
+        parentApproval!.TaskState = (int)WfTaskState.Finished;
+        await repo.UpdateTaskAsync(parentApproval);
         var child = await engine.StartProcessInstanceByIdAsync(
             childDid, "user1", new FlowData(), parentId, "subprocess");
         var childId = child.InstanceId!.Value;

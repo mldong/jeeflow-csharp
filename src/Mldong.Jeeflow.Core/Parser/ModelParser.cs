@@ -47,6 +47,7 @@ public static class ModelParser
     public const string ArgsKey = "args";
     public const string ReturnValKey = "val";
     public const string VersionKey = "version";
+    public const string ProcessNameKey = "processName";
 
     /// <summary>将流程定义 JSON 字节解析为流程模型。</summary>
     public static ProcessModel Parse(byte[]? bytes, ServiceContext context)
@@ -353,8 +354,17 @@ public static class ModelParser
                 custom.Var = Str(properties, ReturnValKey) ?? FlowConst.CustomReturnVal;
                 break;
             case SubProcessModel sub:
+                // issues/257 裁决 A：定义查找键固定 processName → properties.name → 节点 id。
+                // form 仅保留给调用方，不参与查找；subProcessName 不是新契约键。
+                sub.ProcessName = Str(properties, ProcessNameKey);
+                if (string.IsNullOrWhiteSpace(sub.ProcessName)) sub.ProcessName = Str(properties, FlowConst.ProcessNameKey);
+                if (string.IsNullOrWhiteSpace(sub.ProcessName)) sub.ProcessName = sub.Name;
                 sub.Form = Str(properties, FormKey);
-                sub.Version = IntOf(properties, VersionKey);
+                if (properties.TryGetValue(VersionKey, out var versionValue) && versionValue != null
+                    && !string.IsNullOrWhiteSpace(versionValue.ToString()))
+                    sub.Version = IntOf(properties, VersionKey);
+                else
+                    sub.Version = null;
                 break;
         }
         return nodeModel;

@@ -31,7 +31,7 @@ dotnet run --project demo/Mldong.Jeeflow.Demo
 
 ## 种子
 
-memory 模式启动时从 `flows/`（15 共享流程）按文件名序载 define(id=1..N) + design + design_his。
+memory 模式启动时从 `flows/`（全部共享流程）按文件名序载 define(id=1..N) + design + design_his。
 resolver：java 兄弟目录（`../jeeflow-java/.../flows`）存在则精确镜像（全量复制+删孤儿）后再读。
 
 ## 8 具名用户

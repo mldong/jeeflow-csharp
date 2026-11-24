@@ -37,7 +37,7 @@ public class JeeflowEngine
         return RunInGateAsync(() => StartInTxAsync(defineId, op, args, parentId, parentNodeName));
     }
 
-    private async Task<ProcessInstance> StartInTxAsync(
+    internal async Task<ProcessInstance> StartInTxAsync(
         long? defineId, string? op, FlowData args,
         long? parentId, string? parentNodeName)
     {
@@ -68,16 +68,10 @@ public class JeeflowEngine
             if (model.GetStart() == null)
                 throw new JeeflowException(WfErr.NotFoundNextNode);
             await model.GetStart()!.ExecuteAsync(exec);
-            // 9. 持久化产生的任务，并更新实例
+            // 9. 持久化产生的任务、更新实例，并在落库后统一播终态事件
             //    TASK_START 事件须在 saveTask 落库（分配 taskId）之后 fire（spec §4.4，issues/13）
             await PersistTasksAsync(exec);
-            await Repository.UpdateInstanceAsync(instance);
-            // 实例终态事件（码 2）：发起即办结的短流（start→end、decision 直达结束）从这一支落库后播。
-            // PersistTasksAsync 内部已 flush 过一次（exec 就是这里的 exec），此处是 java 同款的第二道
-            // 显式收口点——队列已 drain 空时它是 no-op，但"发起路径有自己的 updateInstance"这件事
-            // 要求 flush 必须排在它之后，不能只依赖前者。顺序判据同 persistTasks 的收口。
-            await FlushInstanceEndEventsAsync(exec);
-            return instance;
+            return exec.ProcessInstance!;
         });
     }
 
@@ -87,7 +81,7 @@ public class JeeflowEngine
         RunInGateAsync(() => RunInInstanceLockAsync(taskId,
             () => ExecuteProcessTaskInTxAsync(taskId, op, args)));
 
-    private async Task<List<ProcessTask>> ExecuteProcessTaskInTxAsync(long taskId, string? op, FlowData args)
+    internal async Task<List<ProcessTask>> ExecuteProcessTaskInTxAsync(long taskId, string? op, FlowData args)
     {
         return await RunInTxAsync(async () =>
         {
@@ -107,7 +101,7 @@ public class JeeflowEngine
             // issues/47 E19：办理时抄送（tf_ccActors）创建 cc 实例
             await HandleCcActorsAsync(exec.ProcessInstance!.InstanceId.Value, op, args.GetObj(FlowConst.CcActors));
             await PersistTasksAsync(exec);
-            return exec.ProcessTaskList;
+            return exec.GetResultTasks();
         });
     }
 
@@ -172,7 +166,7 @@ public class JeeflowEngine
                 await transition.ExecuteAsync(exec);
             }
             await PersistTasksAsync(exec);
-            return exec.ProcessTaskList;
+            return exec.GetResultTasks();
         });
     }
 
@@ -209,7 +203,7 @@ public class JeeflowEngine
                 await transition.ExecuteAsync(exec);
             }
             await PersistTasksAsync(exec);
-            return exec.ProcessTaskList;
+            return exec.GetResultTasks();
         });
     }
 
@@ -277,7 +271,7 @@ public class JeeflowEngine
                 }
             }
             await PersistTasksAsync(exec);
-            return exec.ProcessTaskList;
+            return exec.GetResultTasks();
         });
     }
 
@@ -560,7 +554,7 @@ public class JeeflowEngine
         var exec = await PrepareExecutionAsync(taskId, op, args);
         if (exec == null) return new List<ProcessTask>();
         await PersistTasksAsync(exec);
-        return exec.ProcessTaskList;
+        return exec.GetResultTasks();
     }
 
     // ═══ 退回修改、重提直返 ═══
@@ -650,7 +644,7 @@ public class JeeflowEngine
         ReapplySupport.PutScopes(newTask, branch);
         exec.AddTask(newTask);
         await PersistTasksAsync(exec);
-        return exec.ProcessTaskList;
+        return exec.GetResultTasks();
     }
 
     /// <summary>申请节点（开始节点的直接后继任务节点）。</summary>
@@ -757,6 +751,10 @@ public class JeeflowEngine
         // 纯读方法（ValidateDeclaredInterceptors 只查名字、不跑拦截器，InterceptAsync 有执行期副作用）。
         var currentNode = model.GetNode(task.TaskName);
         currentNode?.ValidateDeclaredInterceptors(model, _context.NamedInterceptors);
+
+        // issues/257：直接出边指向子流程时，先只读校验目标定义。放在 CompleteTask/写库/事件之前，
+        // 内存仓储也能保证缺定义时当前任务与实例快照完全不变。
+        await StartAndExecuteSupport.ValidateSubProcessTargetAsync(model, currentNode, Repository);
 
         // 已办撤回开关快照（issues/251）：把当前节点的 allowRecall 开关值盖到执行入参，随办结落已完成行变量。
         // 必须排在 CompleteTask 之前（盖章要进本次办理的行变量），且排在拦截器可解析校验之后（校验报错即零写入）。
@@ -918,6 +916,13 @@ public class JeeflowEngine
 
     private async Task PersistTasksAsync(Execution exec)
     {
+        await PersistTasksTreeAsync(exec);
+        await FlushInstanceEndEventsAsync(exec);
+    }
+
+    private async Task PersistTasksTreeAsync(Execution exec)
+    {
+        // 当前 execution 的任务始终使用自己的模型/实例变量落库；父级联不能借用子流程上下文。
         foreach (var task in exec.ProcessTaskList)
         {
             await ApplySurrogateAsync(exec, task);
@@ -952,8 +957,8 @@ public class JeeflowEngine
             await Repository.UpdateTaskAsync(exec.ProcessTask);
         }
         await Repository.UpdateInstanceAsync(exec.ProcessInstance!);
-        // 实例终态事件（码 2）：紧跟上面那次 UpdateInstanceAsync —— 行的 state 已落库才允许播
-        await FlushInstanceEndEventsAsync(exec);
+        foreach (var continuation in exec.Continuations)
+            await PersistTasksTreeAsync(continuation);
     }
 
     /// <summary>
@@ -989,7 +994,8 @@ public class JeeflowEngine
     /// </summary>
     private async Task FlushInstanceEndEventsAsync(Execution exec)
     {
-        var pending = exec.DrainPendingEnds();
+        var pending = new List<PendingInstanceEnd>();
+        CollectPendingEnds(exec, pending);
         if (pending.Count == 0) return;
         foreach (var end in pending)
         {
@@ -1006,6 +1012,12 @@ public class JeeflowEngine
             await ProcessPublisher.NotifyInstanceEndAsync(
                 end.InstanceId, end.State, _context.EventListeners);
         }
+    }
+
+    private static void CollectPendingEnds(Execution exec, List<PendingInstanceEnd> pending)
+    {
+        pending.AddRange(exec.DrainPendingEnds());
+        foreach (var continuation in exec.Continuations) CollectPendingEnds(continuation, pending);
     }
 
     /// <summary>

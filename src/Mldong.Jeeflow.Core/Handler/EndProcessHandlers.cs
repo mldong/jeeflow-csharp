@@ -16,6 +16,41 @@ public class EndProcessHandler : IHandler
     {
         var submitType = execution.Args.GetInt(FlowConst.SubmitType, (int)WfSubmitType.Agree);
         var instance = execution.ProcessInstance!;
+
+        // SnakerFlow 主链（issues/257）：仍有未完成主办任务时不得结束；协办行可自动完成。
+        // 当前聚合根优先：会签合并/拒绝刚把兄弟任务改成 FINISHED 或 ABANDON，内存仓与 JDBC
+        // 都还没走到本次 UpdateInstance，只查仓储会把本次命令已清掉的行误判成进行中。
+        var active = instance.GetDoingTasks().ToList();
+        var knownTaskIds = instance.Tasks.Where(t => t.TaskId != null).Select(t => t.TaskId!.Value).ToHashSet();
+        foreach (var task in await execution.Engine!.Repository.FindDoingTasksAsync(
+                     instance.InstanceId!.Value, null))
+            if (!knownTaskIds.Contains(task.TaskId!.Value)) active.Add(task);
+        // 内部腿沿用当前命令的事务/命令闸，不重入公共 ExecuteProcessTaskAsync 的 SemaphoreSlim。
+        if (active.Any(t => t.TaskType != WfTaskType.Secondary))
+            throw new JeeflowException("存在未完成的主办任务,请确认.");
+        var activeTaskIds = active.Select(t => t.TaskId!.Value).ToHashSet();
+        foreach (var task in active)
+        {
+            var assistArgs = execution.Args.Copy();
+            assistArgs[FlowConst.SubmitType] = (int)WfSubmitType.Agree;
+            await execution.Engine.ExecuteProcessTaskInTxAsync(
+                task.TaskId!.Value, FlowConst.AutoId, assistArgs);
+        }
+        if (active.Count > 0)
+        {
+            var refreshed = await execution.Engine.Repository.FindInstanceByIdAsync(instance.InstanceId);
+            if (refreshed != null)
+            {
+                foreach (var task in refreshed.Tasks)
+                {
+                    var index = instance.Tasks.FindIndex(t => t.TaskId == task.TaskId);
+                    if (activeTaskIds.Contains(task.TaskId!.Value) || index < 0)
+                        instance.Tasks[index < 0 ? instance.Tasks.Count : index] = task;
+                }
+                foreach (var kv in refreshed.Variables) instance.Variables[kv.Key] = kv.Value;
+            }
+        }
+
         if (submitType == (int)WfSubmitType.Reject)
         {
             instance.Reject(execution.Context.ClockOrDefault);
@@ -57,21 +92,14 @@ public class EndProcessHandler : IHandler
                 ProcessModel = pm,
                 ProcessInstance = parentInstance,
                 ProcessInstanceId = parentInstance.InstanceId,
-                Args = execution.Args,
-                Operator = execution.Operator,
+                // 回父沿用本次子流程执行参数；父实例变量仍由父聚合根自己维护。
+                Args = execution.Args.Copy(),
+                Operator = StartAndExecuteSupport.RealOperator(execution.Operator, instance),
                 Context = execution.Context,
             };
             await spm.ExecuteAsync(newExec);
-            execution.AddTasks(newExec.ProcessTaskList);
-            // 父实例若被这一支流转带到终态，**它的**子流程节点会再进一次本处理器，
-            // 登记挂在 newExec 上；newExec 是这里的局部对象，随即丢弃 ⇒ 待播事件
-            // 必须与任务一起上收到外层 execution（同 AddTasks 那条腿），漏一行
-            // 就是"父实例终态事件整支丢掉"。
-            execution.AddPendingEnds(newExec.PendingEnds);
-            // 同一条收口腿的 issues/142 档：父实例这一支若命中 custom（记录类）节点，
-            // 它的历史行挂在 newExec.HistoryTasks 上 ⇒ 不并上来就是"父流程的留痕行永远进不了库"。
-            // 这条与 AddTasks/AddPendingEnds 两腿平行，缺一不可（newExec 出了本方法就是孤儿对象）。
-            execution.AddHistoryTasks(newExec.HistoryTasks);
+            execution.AddContinuation(newExec);
+            // 父实例的任务、历史行与终态事件随独立 continuation 持久化，避免借用子流程上下文。
         }
     }
 }
@@ -168,9 +196,9 @@ public class MergeBranchHandler : IHandler
 }
 
 /// <summary>
-/// 启动子流程处理器（对齐 Java StartSubProcessHandler）。
-/// 注意：Java 参考实现此处传 null defineId（死路径，共享 15 flows 无子流程节点）——
-/// C# 保持等价契约：按 nodeName 查定义失败时抛"没有流程定义"。
+/// 启动子流程处理器（issues/257）：按 processName/version 定位定义，起独立子实例并复用
+/// startAndExecute 自办初始 DOING 快照。子启动/自办各自负责持久化与事件，本处理器不把子任务
+/// 并入父 execution 重复保存或重复 fire TASK_START。
 /// </summary>
 public class StartSubProcessHandler : IHandler
 {
@@ -181,13 +209,29 @@ public class StartSubProcessHandler : IHandler
     public async Task HandleAsync(Execution execution)
     {
         var engine = execution.Engine;
-        if (engine == null) return;
-        var child = await engine.StartProcessInstanceByIdAsync(
-            null,
-            execution.Operator,
-            execution.Args,
-            execution.ProcessInstanceId,
-            _subProcessModel.Name);
-        if (child != null) execution.AddTasks(child.GetDoingTasks());
+        var parent = execution.ProcessInstance;
+        if (engine == null || parent == null) return;
+
+        var define = await engine.Repository.FindDefineByNameAndVersionAsync(
+            _subProcessModel.ProcessName, _subProcessModel.Version);
+        if (define == null)
+            throw new JeeflowException(WfErr.NotFoundProcessDefine,
+                "子流程" + _subProcessModel.ProcessName + "定义不存在");
+
+        var op = StartAndExecuteSupport.RealOperator(execution.Operator, parent);
+        var childArgs = StartAndExecuteSupport.ChildArgs(execution.Args);
+        var parentTasksBefore = (await engine.Repository.FindDoingTasksAsync(parent.InstanceId!.Value, null))
+            .Select(t => t.TaskId).ToHashSet();
+        var child = await engine.StartInTxAsync(
+            define.Id, op, childArgs, parent.InstanceId, _subProcessModel.Name);
+        // 初始 DOING 快照由子 start 落库；这里逐任务补真实发起人后以 flow.auto 自办。
+        // 内部腿不重入 _cmdGate，子任务已持久化，因此不再 AddTasks 到父 execution。
+        var result = await StartAndExecuteSupport.ApplyInitialTasksAsync(
+            engine, child.InstanceId!.Value, op, childArgs);
+        result.AddRange(await engine.Repository.FindDoingTasksAsync(child.InstanceId.Value, null));
+        foreach (var task in await engine.Repository.FindDoingTasksAsync(parent.InstanceId.Value, null))
+            if (!parentTasksBefore.Contains(task.TaskId)) result.Add(task);
+        execution.AddPersistedTasks(result.Where(t => t.TaskId != null)
+            .GroupBy(t => t.TaskId).Select(g => g.First()));
     }
 }

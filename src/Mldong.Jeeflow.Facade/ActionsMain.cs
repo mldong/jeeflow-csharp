@@ -43,27 +43,8 @@ public partial class JeeflowFacade
             if (kv.Key != FlowConst.ProcessDefineIdKey && kv.Key != "operator") flowArgs[kv.Key] = kv.Value;
         }
         var inst = await _engine.StartProcessInstanceByIdAsync(defineId, op, flowArgs);
-        // boot2 startAndExecute：自动完成申请节点（assignee="applicant" → 发起人）
-        var doingTasks = await _repository.FindDoingTasksAsync(inst.InstanceId!.Value, new string[] { });
-        foreach (var task in doingTasks)
-        {
-            await _repository.AddTaskActorAsync(task.TaskId!.Value, new List<string> { op });
-            flowArgs[FlowConst.SubmitType] = (int)WfSubmitType.Apply;
-            // f_nextNodeOperator（发起时预指派人）→ tf_nextNodeOperator（引擎执行参数）
-            // issues/142 B 批 · spec 06 §2.11「两形同判据」：这里原先用 GetStr（＝value.ToString()）读值，
-            // 数组形态被整条串成 <b>.NET 类型名</b>当成一个参与者落进 actor_id——实机取证读数
-            // Expected ["17001","17002"] / Actual ["System.Collections.Generic.List`1[System.Object]"]。
-            // 现在过归属值判据单点（逗号串/数组/标量同一枚：逐元素 trim、空值丢弃、折叠、数字收敛成字符串），
-            // 归一后为空 ⇒ 与"没填"同档（不写 tf_nextNodeOperator，由引擎回落节点 assignee）。
-            var startNextOp = PageQuery.NormalizeActors(flowArgs.GetObj(FlowConst.ProcessStartNextNodeOperator));
-            if (startNextOp.Count > 0)
-            {
-                flowArgs[FlowConst.NextNodeOperator] = startNextOp;
-            }
-            // issues/176：spec 04:60-62——apply 节点由 flow.auto 代执行（operator 列=flow.auto，
-            // 不进发起人已办）；u_* 由发起腿留下、引擎对 flow.auto 跳过注入（对齐 boot2 :317）
-            await _engine.ExecuteProcessTaskAsync(task.TaskId.Value, FlowConst.AutoId, flowArgs);
-        }
+        await StartAndExecuteSupport.ApplyInitialTasksAsync(
+            _engine, inst.InstanceId!.Value, op, flowArgs);
         return Ok(new Dictionary<string, object?>
         {
             [FlowConst.ProcessInstanceIdKey] = inst.InstanceId,

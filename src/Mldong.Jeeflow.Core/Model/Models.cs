@@ -485,9 +485,10 @@ public class JoinModel : NodeModel
     }
 }
 
-/// <summary>子流程节点模型（占位：启动子流程走 StartSubProcessHandler）。</summary>
+/// <summary>子流程节点模型（启动子流程走 StartSubProcessHandler；办结回父时只驱动父出边）。</summary>
 public class SubProcessModel : NodeModel
 {
+    public string? ProcessName { get; set; }
     public string? Form { get; set; }
     public int? Version { get; set; }
 

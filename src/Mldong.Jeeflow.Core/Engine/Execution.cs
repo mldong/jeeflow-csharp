@@ -13,6 +13,8 @@ public class Execution
     public ProcessTask? ProcessTask { get; set; }
     public ProcessInstance? ProcessInstance { get; set; }
     public List<ProcessTask> ProcessTaskList { get; set; } = new();
+    private readonly List<ProcessTask> _persistedTasks = new();
+    private readonly List<Execution> _continuations = new();
     public bool IsMerged { get; set; }
     public JeeflowEngine? Engine { get; set; }
     public string? Operator { get; set; }
@@ -53,6 +55,20 @@ public class Execution
     public void AddTask(ProcessTask task) => ProcessTaskList.Add(task);
 
     public void AddTasks(IEnumerable<ProcessTask> tasks) => ProcessTaskList.AddRange(tasks);
+
+    public void AddPersistedTasks(IEnumerable<ProcessTask> tasks) => _persistedTasks.AddRange(tasks);
+
+    public List<ProcessTask> GetResultTasks()
+    {
+        var result = new List<ProcessTask>(ProcessTaskList);
+        result.AddRange(_persistedTasks);
+        foreach (var continuation in _continuations) result.AddRange(continuation.GetResultTasks());
+        return result;
+    }
+
+    public void AddContinuation(Execution continuation) => _continuations.Add(continuation);
+
+    public IReadOnlyList<Execution> Continuations => _continuations;
 
     /// <summary>登记一条记录类历史行（只落库、不 fire 码 3，见 <see cref="_historyTasks"/>）。</summary>
     public void AddHistoryTask(ProcessTask task) => _historyTasks.Add(task);

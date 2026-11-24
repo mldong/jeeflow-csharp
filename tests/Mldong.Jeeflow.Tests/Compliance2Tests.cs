@@ -160,15 +160,15 @@ public class Compliance2Tests
         // EndProcessHandler 读 submitType=2 → 实例 45
         var (engine, repo) = TestInfra.NewEngine();
         var did = await TestInfra.SaveFlowDefineAsync(repo, "cs-jump-flag",
-            TestInfra.LoadFlow("13-countersign-one-vote-veto"));
+            TestInfra.LoadFlow("01-simple"));
         var iid = await TestInfra.StartAndApplyAsync(engine, repo, did);
-        var userA = await TestInfra.FindDoingForAsync(repo, iid, "userA");
+        var task = await TestInfra.FindDoingForAsync(repo, iid, "leader");
         var args = new FlowData
         {
             [FlowConst.SubmitType] = (int)WfSubmitType.Reject,
             [FlowConst.CountersignDisagreeFlag] = 1,
         };
-        await engine.ExecuteAndJumpToEndAsync(userA.TaskId!.Value, "userA", args);
+        await engine.ExecuteAndJumpToEndAsync(task.TaskId!.Value, "leader", args);
         var inst = await repo.FindInstanceByIdAsync(iid);
         Assert.Equal((int)WfInstanceState.Reject, inst!.State);
         // flag 经 args 落实例变量
@@ -176,7 +176,7 @@ public class Compliance2Tests
         var allTasks = await repo.FindHistoryTasksAsync(iid);
         foreach (var t in allTasks)
         {
-            if (t.TaskId == userA.TaskId)
+            if (t.TaskId == task.TaskId)
                 Assert.Equal("1", t.Variables.GetStr(FlowConst.CountersignDisagreeFlag));
         }
     }

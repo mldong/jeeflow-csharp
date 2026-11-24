@@ -110,21 +110,38 @@ public class MySqlRepository : IProcessRepository, IInstanceLockRepository
         cmd.Parameters.Add(new MySqlParameter { Value = defineId.Value });
         await using var rs = await cmd.ExecuteReaderAsync();
         if (!await rs.ReadAsync()) return null;
-        return new ProcessDefine
-        {
-            Id = rs.GetInt64("id"),
-            Name = rs.GetString("name"),
-            DisplayName = GetStr(rs, "display_name"),
-            Type = GetStr(rs, "type"),
-            State = GetInt(rs, "state"),
-            Content = GetBytes(rs, "content"),
-            Version = GetInt(rs, "version"),
-            CreateTime = GetDateTime(rs, "create_time"),
-            CreateUser = GetStr(rs, "create_user"),
-            UpdateTime = GetDateTime(rs, "update_time"),
-            UpdateUser = GetStr(rs, "update_user"),
-        };
+        return MapDefine(rs);
     }
+
+    public virtual async Task<ProcessDefine?> FindDefineByNameAndVersionAsync(string? processName, int? version)
+    {
+        if (string.IsNullOrWhiteSpace(processName)) return null;
+        await using var lease = await RentAsync();
+        const string sql = "SELECT id, name, display_name, type, state, content, version, " +
+                           "create_time, create_user, update_time, update_user FROM wf_process_define " +
+                           "WHERE name = ? AND (? IS NULL OR version = ?) ORDER BY version DESC, id DESC LIMIT 1";
+        await using var cmd = NewCmd(sql, lease.Conn);
+        cmd.Parameters.Add(new MySqlParameter { Value = processName });
+        cmd.Parameters.Add(new MySqlParameter { Value = version.HasValue ? version.Value : DBNull.Value });
+        cmd.Parameters.Add(new MySqlParameter { Value = version.HasValue ? version.Value : DBNull.Value });
+        await using var rs = await cmd.ExecuteReaderAsync();
+        return await rs.ReadAsync() ? MapDefine(rs) : null;
+    }
+
+    private static ProcessDefine MapDefine(IDataRecord rs) => new()
+    {
+        Id = GetLong(rs, "id"),
+        Name = GetStr(rs, "name"),
+        DisplayName = GetStr(rs, "display_name"),
+        Type = GetStr(rs, "type"),
+        State = GetInt(rs, "state"),
+        Content = GetBytes(rs, "content"),
+        Version = GetInt(rs, "version"),
+        CreateTime = GetDateTime(rs, "create_time"),
+        CreateUser = GetStr(rs, "create_user"),
+        UpdateTime = GetDateTime(rs, "update_time"),
+        UpdateUser = GetStr(rs, "update_user"),
+    };
 
     public virtual async Task SaveDefineAsync(ProcessDefine define)
     {
