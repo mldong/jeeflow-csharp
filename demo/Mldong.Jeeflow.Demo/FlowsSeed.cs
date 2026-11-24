@@ -143,7 +143,7 @@ public static class FlowsSeed
                 new BuiltinAssignmentHandlers.OperatorAssignmentHandler());
             ctx.RegisterAssignmentHandler("com.mldong.jeeflow.interceptor.impl.FormFieldAssigneeHandler",
                 new BuiltinAssignmentHandlers.FormFieldAssigneeHandler());
-            ctx.RegisterAssignmentHandler("com.mldong.jeeflow.interceptor.impl.DeptLeaderAssignmentHandler",
+            ctx.RegisterAssignmentHandler("com.mldong.jeeflow.interceptor.impl.OrgUserAssignmentHandlers$DeptLeaderAssignmentHandler",
                 new BuiltinAssignmentHandlers.DeptLeaderAssignmentHandler());
             ctx.RegisterAssignmentHandler("com.mldong.jeeflow.interceptor.impl.DeptMainLeaderAssignmentHandler",
                 new BuiltinAssignmentHandlers.DeptMainLeaderAssignmentHandler());
@@ -151,7 +151,7 @@ public static class FlowsSeed
                 new BuiltinAssignmentHandlers.ApplicantDeptLeaderAssignmentHandler());
             ctx.RegisterAssignmentHandler("com.mldong.jeeflow.interceptor.impl.ApplicantDeptMainLeaderAssignmentHandler",
                 new BuiltinAssignmentHandlers.ApplicantDeptMainLeaderAssignmentHandler());
-            ctx.RegisterAssignmentHandler("com.mldong.jeeflow.interceptor.impl.TaskRoleAssigneeHandler",
+            ctx.RegisterAssignmentHandler("com.mldong.jeeflow.interceptor.impl.OrgUserAssignmentHandlers$TaskRoleAssigneeHandler",
                 new BuiltinAssignmentHandlers.TaskRoleAssigneeHandler());
             // 两个「表单指定用户」类：注册名用顶级类 FQN，与 Metadata 及其余七语言逐字一致
             ctx.RegisterAssignmentHandler("com.mldong.jeeflow.interceptor.impl.FormUserDeptLeaderAssignmentHandler",
