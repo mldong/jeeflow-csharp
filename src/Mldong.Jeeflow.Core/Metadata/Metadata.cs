@@ -91,6 +91,10 @@ public class HandlerRegistry
             "表单指定用户所属部门经理", 70);
         Register(assignment, "com.mldong.jeeflow.interceptor.impl.FormUserDeptMainLeaderAssignmentHandler",
             "表单指定用户所属部门分管领导", 80);
+        Register(assignment, "com.mldong.jeeflow.interceptor.impl.FormDeptLeaderAssignmentHandler",
+            "表单指定部门负责人", 90);
+        Register(assignment, "com.mldong.jeeflow.interceptor.impl.FormDeptMainLeaderAssignmentHandler",
+            "表单指定部门分管领导", 100);
         // issues/29：action 权限码映射 SPI 清单
         Register("IActionPermissionProvider", "com.mldong.jeeflow.spi.DefaultActionPermissionProvider",
             "action 权限码默认映射（boot3 注解语义归纳）", 0);

@@ -183,7 +183,7 @@ public sealed class ServiceContext
 /// <summary>有序拦截器条目。</summary>
 public sealed record InterceptorEntry(int Order, Func<Execution, Task> Run, string? Group = null);
 
-/// <summary>参与者处理接口（内置 9 个，注册名=Java FQCN）。</summary>
+/// <summary>参与者处理接口（内置 11 个，注册名=Java FQCN）。</summary>
 public interface IAssignmentHandler
 {
     Task<string?> AssignAsync(Execution execution);

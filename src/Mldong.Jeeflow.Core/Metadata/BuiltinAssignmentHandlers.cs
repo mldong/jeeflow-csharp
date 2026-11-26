@@ -148,8 +148,93 @@ public static class BuiltinAssignmentHandlers
         }
     }
 
+    /// <summary>表单指定 1–N 个部门，取这些部门的负责人。</summary>
+    public sealed class FormDeptLeaderAssignmentHandler : IAssignmentHandler
+    {
+        public Task<string?> AssignAsync(Execution execution) => ResolveFormDeptAsync(execution, false);
+    }
+
+    /// <summary>表单指定 1–N 个部门，取这些部门的分管领导。</summary>
+    public sealed class FormDeptMainLeaderAssignmentHandler : IAssignmentHandler
+    {
+        public Task<string?> AssignAsync(Execution execution) => ResolveFormDeptAsync(execution, true);
+    }
+
     /// <summary>
-    /// 两个「表单指定用户」handler 专用的四档并集查找（顺序即优先级）：
+    /// issues/258：字段值 → 1–N 个部门 ID → 各部门负责人/分管领导。
+    /// 部门按首次出现顺序逐个查询，SPI 返回顺序追加，最终 userId 去重；
+    /// 缺节点、缺字段、空值、缺 SPI、部门无领导均为空且不抛。
+    /// </summary>
+    private static async Task<string?> ResolveFormDeptAsync(Execution execution, bool main)
+    {
+        var nodeKey = execution.NodeModel?.Name;
+        if (string.IsNullOrEmpty(nodeKey) || execution.Args == null) return null;
+        var deptIds = ParseFormDeptIds(FindFormUserFieldValue(execution.Args, nodeKey));
+        if (deptIds.Count == 0) return null;
+        var org = execution.Context?.OrgUserProvider;
+        if (org == null) return null;
+
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var deptId in deptIds)
+        {
+            List<string>? leaders;
+            try
+            {
+                leaders = main
+                    ? await org.FindDeptMainLeadersAsync(deptId)
+                    : await org.FindDeptLeadersAsync(deptId);
+            }
+            catch
+            {
+                continue;
+            }
+            if (leaders == null) continue;
+            foreach (var leader in leaders)
+            {
+                if (leader == null) continue;
+                var id = leader.Trim();
+                if (id.Length > 0 && seen.Add(id)) result.Add(id);
+            }
+        }
+        return result.Count == 0 ? null : string.Join(",", result);
+    }
+
+    /// <summary>
+    /// 部门 ID 解析：字符串拆英文逗号；数组/集合逐元素读取且不二次拆；
+    /// trim 后丢空，保留 "0"，按首次出现顺序去重。Map 不按集合键展开。
+    /// </summary>
+    private static List<string> ParseFormDeptIds(object? value)
+    {
+        var result = new List<string>();
+        if (value == null) return result;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        void Add(object? token)
+        {
+            if (token == null) return;
+            var id = token.ToString()?.Trim() ?? "";
+            if (id.Length > 0 && seen.Add(id)) result.Add(id);
+        }
+
+        if (value is string text)
+        {
+            foreach (var item in text.Split(',')) Add(item);
+        }
+        else if (value is System.Collections.ICollection collection &&
+                 value is not System.Collections.IDictionary)
+        {
+            foreach (var item in collection) Add(item);
+        }
+        else
+        {
+            Add(value);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// 「表单指定用户」与「表单指定部门」handler 共用的四档并集查找（顺序即优先级）：
     /// 1. <c>f_&lt;nodeKey&gt;</c> 2. <c>&lt;nodeKey&gt;</c>
     /// 3. 含 <c>#</c> 时取最后一个 # 之后的 field：先裸名、再 f_ 变体
     /// 4. 匹配 <c>^(.+?)_(\d+)$</c> 时取 base：先 f_ 变体、再裸名

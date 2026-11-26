@@ -158,6 +158,11 @@ public static class FlowsSeed
                 new BuiltinAssignmentHandlers.FormUserDeptLeaderAssignmentHandler());
             ctx.RegisterAssignmentHandler("com.mldong.jeeflow.interceptor.impl.FormUserDeptMainLeaderAssignmentHandler",
                 new BuiltinAssignmentHandlers.FormUserDeptMainLeaderAssignmentHandler());
+            // 两个「表单指定部门」类：顶级 Java FQCN，负责人/分管领导两档（issues/258）
+            ctx.RegisterAssignmentHandler("com.mldong.jeeflow.interceptor.impl.FormDeptLeaderAssignmentHandler",
+                new BuiltinAssignmentHandlers.FormDeptLeaderAssignmentHandler());
+            ctx.RegisterAssignmentHandler("com.mldong.jeeflow.interceptor.impl.FormDeptMainLeaderAssignmentHandler",
+                new BuiltinAssignmentHandlers.FormDeptMainLeaderAssignmentHandler());
         }
     }
 }

@@ -270,13 +270,12 @@ public class FormUserAssignmentHandlerTests
     {
         var registry = new HandlerRegistry();
         var metas = registry.ListHandlers("AssignmentHandler");
-        var tail = metas.Skip(metas.Count - 2).ToList();
-        Assert.Equal(FqLeader, tail[0].ClassName);
-        Assert.Equal("表单指定用户所属部门经理", tail[0].DisplayName);
-        Assert.Equal(70, tail[0].Order);
-        Assert.Equal(FqMain, tail[1].ClassName);
-        Assert.Equal("表单指定用户所属部门分管领导", tail[1].DisplayName);
-        Assert.Equal(80, tail[1].Order);
+        var leader = Assert.Single(metas, m => m.ClassName == FqLeader);
+        Assert.Equal("表单指定用户所属部门经理", leader.DisplayName);
+        Assert.Equal(70, leader.Order);
+        var main = Assert.Single(metas, m => m.ClassName == FqMain);
+        Assert.Equal("表单指定用户所属部门分管领导", main.DisplayName);
+        Assert.Equal(80, main.Order);
     }
 
     [Fact]
