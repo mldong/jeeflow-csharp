@@ -573,6 +573,22 @@ public class ComplianceTests
     }
 
     [Fact]
+    public void C22_RuntimeBuiltinNamesMatchMetadata()
+    {
+        var registry = new HandlerRegistry();
+        var expected = registry.ListHandlers("AssignmentHandler")
+            .Select(meta => meta.ClassName)
+            .ToHashSet();
+        var (_, _, ctx) = TestInfra.NewEngineWithCtx();
+        var actual = ctx.AssignmentHandlers.Keys
+            .Where(name => name != "com.mldong.jeeflow.test.TestCustomHandler")
+            .ToHashSet();
+
+        Assert.True(expected.SetEquals(actual),
+            $"metadata/runtime 注册名漂移：缺少 [{string.Join(",", expected.Except(actual))}]，多出 [{string.Join(",", actual.Except(expected))}]");
+    }
+
+    [Fact]
     public async Task Cxx_CustomNodeRunsHandlerAndRecordsHistory()
     {
         // flows/08-custom-node：custom 节点按名解析 handler → FINISHED 历史任务 → 沿边驱动到 end

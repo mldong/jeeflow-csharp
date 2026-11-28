@@ -46,13 +46,13 @@ public static class TestInfra
             "com.mldong.jeeflow.interceptor.impl.OrgUserAssignmentHandlers$DeptLeaderAssignmentHandler",
             new BuiltinAssignmentHandlers.DeptLeaderAssignmentHandler());
         ctx.RegisterAssignmentHandler(
-            "com.mldong.jeeflow.interceptor.impl.DeptMainLeaderAssignmentHandler",
+            "com.mldong.jeeflow.interceptor.impl.OrgUserAssignmentHandlers$DeptMainLeaderAssignmentHandler",
             new BuiltinAssignmentHandlers.DeptMainLeaderAssignmentHandler());
         ctx.RegisterAssignmentHandler(
-            "com.mldong.jeeflow.interceptor.impl.ApplicantDeptLeaderAssignmentHandler",
+            "com.mldong.jeeflow.interceptor.impl.OrgUserAssignmentHandlers$ApplicantDeptLeaderAssignmentHandler",
             new BuiltinAssignmentHandlers.ApplicantDeptLeaderAssignmentHandler());
         ctx.RegisterAssignmentHandler(
-            "com.mldong.jeeflow.interceptor.impl.ApplicantDeptMainLeaderAssignmentHandler",
+            "com.mldong.jeeflow.interceptor.impl.OrgUserAssignmentHandlers$ApplicantDeptMainLeaderAssignmentHandler",
             new BuiltinAssignmentHandlers.ApplicantDeptMainLeaderAssignmentHandler());
         ctx.RegisterAssignmentHandler(
             "com.mldong.jeeflow.interceptor.impl.OrgUserAssignmentHandlers$TaskRoleAssigneeHandler",
