@@ -303,20 +303,20 @@ public class FormDeptAssignmentHandlerTests
     public void MetadataExposesTwoNewHandlersInOrder()
     {
         var metas = new HandlerRegistry().ListHandlers("AssignmentHandler");
-        Assert.Equal(11, metas.Count);
-        Assert.Equal(FqLeader, metas[^2].ClassName);
-        Assert.Equal("表单指定部门负责人", metas[^2].DisplayName);
-        Assert.Equal(90, metas[^2].Order);
-        Assert.Equal(FqMain, metas[^1].ClassName);
-        Assert.Equal("表单指定部门分管领导", metas[^1].DisplayName);
-        Assert.Equal(100, metas[^1].Order);
+        Assert.Equal(13, metas.Count);
+        Assert.Equal(FqLeader, metas[^3].ClassName);
+        Assert.Equal("表单指定部门负责人", metas[^3].DisplayName);
+        Assert.Equal(90, metas[^3].Order);
+        Assert.Equal(FqMain, metas[^2].ClassName);
+        Assert.Equal("表单指定部门分管领导", metas[^2].DisplayName);
+        Assert.Equal(100, metas[^2].Order);
     }
 
     [Fact]
     public void RegistrationNamesResolveToNewClasses()
     {
         var ctx = TestInfra.NewContext(new MemoryRepository());
-        Assert.Equal(11, ctx.AssignmentHandlers.Count);
+        Assert.Equal(13, ctx.AssignmentHandlers.Count);
         Assert.IsType<BuiltinAssignmentHandlers.FormDeptLeaderAssignmentHandler>(
             ctx.FindAssignmentHandler(FqLeader));
         Assert.IsType<BuiltinAssignmentHandlers.FormDeptMainLeaderAssignmentHandler>(

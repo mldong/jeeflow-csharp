@@ -4,7 +4,7 @@ namespace Mldong.Jeeflow.Core;
 
 /// <summary>
 /// 内置参与者处理器（issues/16，C29）：注册名=Java FQCN（HandlerRegistry 同清单）。
-/// 数据来源 IOrgUserProvider / IUserProvider SPI——未注册时相关 handler 返回 null（静默返空）。
+/// 数据来源 IOrgUserProvider / IPostUserProvider / IUserProvider SPI——未注册时相关 handler 返回 null（静默返空）。
 /// </summary>
 public static class BuiltinAssignmentHandlers
 {
@@ -125,6 +125,28 @@ public static class BuiltinAssignmentHandlers
         }
     }
 
+    /// <summary>任务节点唯一编码关联岗位（postCode = 节点 name，issues/259）。</summary>
+    public sealed class TaskPostAssigneeHandler : IAssignmentHandler
+    {
+        public async Task<string?> AssignAsync(Execution execution)
+        {
+            var postCode = execution.NodeModel?.Name;
+            if (string.IsNullOrEmpty(postCode)) return null;
+            var provider = execution.Context?.PostUserProvider;
+            if (provider == null) return null;
+            List<string>? ids;
+            try
+            {
+                ids = await provider.FindByPostAsync(postCode);
+            }
+            catch
+            {
+                return null;
+            }
+            return ids == null || ids.Count == 0 ? null : string.Join(",", ids);
+        }
+    }
+
     /// <summary>
     /// 表单指定用户所属部门的经理。场景（参照 mldong-fastapi-wf 提交 fe9233d）：HR 代员工提交、
     /// 代理申请——表单里给出被代理人的用户 id，取**该员工**所属部门的经理，与当前操作人无关。
@@ -158,6 +180,12 @@ public static class BuiltinAssignmentHandlers
     public sealed class FormDeptMainLeaderAssignmentHandler : IAssignmentHandler
     {
         public Task<string?> AssignAsync(Execution execution) => ResolveFormDeptAsync(execution, true);
+    }
+
+    /// <summary>表单指定 1–N 个岗位，取这些岗位的成员（issues/259）。</summary>
+    public sealed class FormPostAssignmentHandler : IAssignmentHandler
+    {
+        public Task<string?> AssignAsync(Execution execution) => ResolveFormPostAsync(execution);
     }
 
     /// <summary>
@@ -198,6 +226,77 @@ public static class BuiltinAssignmentHandlers
             }
         }
         return result.Count == 0 ? null : string.Join(",", result);
+    }
+
+    /// <summary>
+    /// issues/259：字段值 → 1–N 个岗位编码 → 各岗位成员。
+    /// 岗位按首次出现顺序逐个查询，SPI 返回顺序追加，最终 userId trim 后去重；
+    /// 缺节点、缺字段、空值、缺 SPI、岗位无成员均为空且不抛，单岗位异常只跳过该岗位。
+    /// </summary>
+    private static async Task<string?> ResolveFormPostAsync(Execution execution)
+    {
+        var nodeKey = execution.NodeModel?.Name;
+        if (string.IsNullOrEmpty(nodeKey) || execution.Args == null) return null;
+        var postCodes = ParseFormPostCodes(FindFormUserFieldValue(execution.Args, nodeKey));
+        if (postCodes.Count == 0) return null;
+        var provider = execution.Context?.PostUserProvider;
+        if (provider == null) return null;
+
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var postCode in postCodes)
+        {
+            List<string>? userIds;
+            try
+            {
+                userIds = await provider.FindByPostAsync(postCode);
+            }
+            catch
+            {
+                continue;
+            }
+            if (userIds == null) continue;
+            foreach (var userId in userIds)
+            {
+                if (userId == null) continue;
+                var id = userId.Trim();
+                if (id.Length > 0 && seen.Add(id)) result.Add(id);
+            }
+        }
+        return result.Count == 0 ? null : string.Join(",", result);
+    }
+
+    /// <summary>
+    /// 岗位编码解析：字符串拆英文逗号；数组/集合逐元素读取且不二次拆；
+    /// trim 后丢空，保留 "0"，按首次出现顺序去重。Map 不按集合键展开。
+    /// </summary>
+    private static List<string> ParseFormPostCodes(object? value)
+    {
+        var result = new List<string>();
+        if (value == null) return result;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        void Add(object? token)
+        {
+            if (token == null) return;
+            var code = token.ToString()?.Trim() ?? "";
+            if (code.Length > 0 && seen.Add(code)) result.Add(code);
+        }
+
+        if (value is string text)
+        {
+            foreach (var item in text.Split(',')) Add(item);
+        }
+        else if (value is System.Collections.ICollection collection &&
+                 value is not System.Collections.IDictionary)
+        {
+            foreach (var item in collection) Add(item);
+        }
+        else
+        {
+            Add(value);
+        }
+        return result;
     }
 
     /// <summary>

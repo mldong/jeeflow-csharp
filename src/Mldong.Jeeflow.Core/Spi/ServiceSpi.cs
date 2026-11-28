@@ -34,6 +34,15 @@ public interface IOrgUserProvider
 }
 
 /// <summary>
+/// 岗位成员查询 SPI（可选，issues/259）。未注册时相关内置 handler 返回空参与者。
+/// </summary>
+public interface IPostUserProvider
+{
+    /// <summary>按岗位编码取用户 ID 列表；岗位不存在或无成员时返回空列表。</summary>
+    Task<List<string>> FindByPostAsync(string postCode);
+}
+
+/// <summary>
 /// 用户搜索钩子（可选）——candidatePage 无模型候选时的用户分页搜索。
 /// </summary>
 public interface IUserSearchProvider

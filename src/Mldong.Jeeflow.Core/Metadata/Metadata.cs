@@ -87,6 +87,8 @@ public class HandlerRegistry
             "根据表单字段值分配参与者", 50);
         Register(assignment, "com.mldong.jeeflow.interceptor.impl.OrgUserAssignmentHandlers$TaskRoleAssigneeHandler",
             "根据任务节点唯一编码关联角色分配参与者", 60);
+        Register(assignment, "com.mldong.jeeflow.interceptor.impl.OrgUserAssignmentHandlers$TaskPostAssigneeHandler",
+            "根据任务节点唯一编码关联岗位分配参与者", 65);
         Register(assignment, "com.mldong.jeeflow.interceptor.impl.FormUserDeptLeaderAssignmentHandler",
             "表单指定用户所属部门经理", 70);
         Register(assignment, "com.mldong.jeeflow.interceptor.impl.FormUserDeptMainLeaderAssignmentHandler",
@@ -95,6 +97,8 @@ public class HandlerRegistry
             "表单指定部门负责人", 90);
         Register(assignment, "com.mldong.jeeflow.interceptor.impl.FormDeptMainLeaderAssignmentHandler",
             "表单指定部门分管领导", 100);
+        Register(assignment, "com.mldong.jeeflow.interceptor.impl.FormPostAssignmentHandler",
+            "表单指定岗位分配参与者", 110);
         // issues/29：action 权限码映射 SPI 清单
         Register("IActionPermissionProvider", "com.mldong.jeeflow.spi.DefaultActionPermissionProvider",
             "action 权限码默认映射（boot3 注解语义归纳）", 0);

@@ -14,6 +14,7 @@ public sealed class ServiceContext
 
     public IUserProvider? UserProvider { get; set; }
     public IOrgUserProvider? OrgUserProvider { get; set; }
+    public IPostUserProvider? PostUserProvider { get; set; }
     public IUserSearchProvider? UserSearchProvider { get; set; }
 
     /// <summary>JSON SPI；未注入用内置 DefaultJsonProvider。</summary>
@@ -183,7 +184,7 @@ public sealed class ServiceContext
 /// <summary>有序拦截器条目。</summary>
 public sealed record InterceptorEntry(int Order, Func<Execution, Task> Run, string? Group = null);
 
-/// <summary>参与者处理接口（内置 11 个，注册名=Java FQCN）。</summary>
+/// <summary>参与者处理接口（内置 13 个，注册名=Java FQCN）。</summary>
 public interface IAssignmentHandler
 {
     Task<string?> AssignAsync(Execution execution);

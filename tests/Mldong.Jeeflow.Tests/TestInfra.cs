@@ -57,6 +57,9 @@ public static class TestInfra
         ctx.RegisterAssignmentHandler(
             "com.mldong.jeeflow.interceptor.impl.OrgUserAssignmentHandlers$TaskRoleAssigneeHandler",
             new BuiltinAssignmentHandlers.TaskRoleAssigneeHandler());
+        ctx.RegisterAssignmentHandler(
+            "com.mldong.jeeflow.interceptor.impl.OrgUserAssignmentHandlers$TaskPostAssigneeHandler",
+            new BuiltinAssignmentHandlers.TaskPostAssigneeHandler());
         // 两个「表单指定用户」类：注册名用顶级类 FQN，与 Metadata 及其余七语言逐字一致
         ctx.RegisterAssignmentHandler(
             "com.mldong.jeeflow.interceptor.impl.FormUserDeptLeaderAssignmentHandler",
@@ -71,6 +74,9 @@ public static class TestInfra
         ctx.RegisterAssignmentHandler(
             "com.mldong.jeeflow.interceptor.impl.FormDeptMainLeaderAssignmentHandler",
             new BuiltinAssignmentHandlers.FormDeptMainLeaderAssignmentHandler());
+        ctx.RegisterAssignmentHandler(
+            "com.mldong.jeeflow.interceptor.impl.FormPostAssignmentHandler",
+            new BuiltinAssignmentHandlers.FormPostAssignmentHandler());
         // custom 节点 handler（等价 Java 测试 classpath：flows/08-custom-node 声明的 clazz）
         ctx.CustomHandlers["com.mldong.jeeflow.test.TestCustomHandler"] = new TestCustomHandler();
     }
